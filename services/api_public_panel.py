@@ -9,9 +9,11 @@ from services.image_service import ImageGenerationError
 
 class PublicPanelConfigUpdateRequest(BaseModel):
     enabled: bool
-    quota: int = Field(default=0, ge=0)
     title: str = ""
     description: str = ""
+    mode: str = Field(default="daily")
+    daily_limit: int = Field(default=0, ge=0)
+    fixed_quota: int = Field(default=0, ge=0)
 
 
 class PublicPanelQuotaAddRequest(BaseModel):
@@ -43,9 +45,11 @@ def register_public_panel_routes(
         require_auth_key(authorization)
         return public_panel_service.update_config(
             enabled=body.enabled,
-            quota=body.quota,
             title=body.title,
             description=body.description,
+            mode=body.mode,
+            daily_limit=body.daily_limit,
+            fixed_quota=body.fixed_quota,
         )
 
     @router.post("/api/public-panel/quota/add")
@@ -54,7 +58,10 @@ def register_public_panel_routes(
         authorization: str | None = Header(default=None),
     ):
         require_auth_key(authorization)
-        return public_panel_service.add_quota(body.amount)
+        try:
+            return public_panel_service.add_quota(body.amount)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
 
     @router.post("/api/public-panel/images/generations")
     async def generate_public_images(body: dict[str, object] = Body(...)):

@@ -27,7 +27,8 @@ COPY main.py ./
 COPY config.json ./
 COPY VERSION ./
 COPY services ./services
-COPY --from=web-build /app/web/out ./web_dist
+COPY --from=web-build /app/web_dist ./web_dist
+COPY --from=web-build /app/web_dist_studio ./web_dist_studio
 
 EXPOSE 80
 

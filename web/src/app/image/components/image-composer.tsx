@@ -23,6 +23,7 @@ type ImageComposerProps = {
   model: ImageModel;
   imageCount: string;
   availableQuota: string;
+  statusHint?: string;
   hasAnyGenerating: boolean;
   generatingCount: number;
   referenceImages: Array<{ name: string; dataUrl: string }>;
@@ -37,6 +38,7 @@ type ImageComposerProps = {
   onPickReferenceImage: () => void;
   onReferenceImageChange: (files: File[]) => void | Promise<void>;
   onRemoveReferenceImage: (index: number) => void;
+  submitBlocked?: boolean;
 };
 
 export function ImageComposer({
@@ -45,6 +47,7 @@ export function ImageComposer({
   model,
   imageCount,
   availableQuota,
+  statusHint,
   hasAnyGenerating,
   generatingCount,
   referenceImages,
@@ -59,6 +62,7 @@ export function ImageComposer({
   onPickReferenceImage,
   onReferenceImageChange,
   onRemoveReferenceImage,
+  submitBlocked = false,
 }: ImageComposerProps) {
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
@@ -176,6 +180,9 @@ export function ImageComposer({
                     </Button>
                   )}
                   <div className="rounded-full bg-stone-100 px-3 py-2 text-xs font-medium text-stone-600">剩余额度 {availableQuota}</div>
+                  {statusHint ? (
+                    <div className="rounded-full bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">{statusHint}</div>
+                  ) : null}
                   {hasAnyGenerating && (
                     <div className="flex items-center gap-1.5 rounded-full bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">
                       <LoaderCircle className="size-3 animate-spin" />
@@ -219,7 +226,7 @@ export function ImageComposer({
                 <button
                   type="button"
                   onClick={() => void onSubmit()}
-                  disabled={!prompt.trim() || (mode === "edit" && referenceImages.length === 0)}
+                  disabled={submitBlocked || !prompt.trim() || (mode === "edit" && referenceImages.length === 0)}
                   className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-stone-950 text-white transition hover:bg-stone-800 disabled:cursor-not-allowed disabled:bg-stone-300"
                   aria-label={mode === "edit" ? "编辑图片" : "生成图片"}
                 >

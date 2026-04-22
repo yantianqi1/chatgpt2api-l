@@ -48,6 +48,23 @@ type AccountUpdateResponse = {
   items: Account[];
 };
 
+export type PublicPanelMode = "daily" | "fixed";
+
+export type PublicPanelConfig = {
+  enabled: boolean;
+  title: string;
+  description: string;
+  mode: PublicPanelMode;
+  daily_limit: number;
+  daily_used: number;
+  daily_reset_date: string;
+  fixed_quota: number;
+  available_quota: number;
+  quota: number;
+  disabled_reason: "disabled" | "quota_exhausted" | null;
+  updated_at: string;
+};
+
 export async function login(authKey: string) {
   const normalizedAuthKey = String(authKey || "").trim();
   return httpRequest<{ ok: boolean }>("/auth/login", {
@@ -135,6 +152,26 @@ export async function editImage(files: File | File[], prompt: string, model: Ima
       body: formData,
     },
   );
+}
+
+export async function fetchPublicPanelConfig() {
+  return httpRequest<PublicPanelConfig>("/api/public-panel/config");
+}
+
+export async function updatePublicPanelConfig(
+  payload: Pick<PublicPanelConfig, "enabled" | "title" | "description" | "mode" | "daily_limit" | "fixed_quota">,
+) {
+  return httpRequest<PublicPanelConfig>("/api/public-panel/config", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function addPublicPanelQuota(amount: number) {
+  return httpRequest<PublicPanelConfig>("/api/public-panel/quota/add", {
+    method: "POST",
+    body: { amount },
+  });
 }
 
 // ── CPA (CLIProxyAPI) ──────────────────────────────────────────────

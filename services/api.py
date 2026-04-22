@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import os
 from pathlib import Path
 from threading import Event, Thread
 
@@ -18,7 +19,15 @@ from services.public_panel_service import PublicPanelService
 from services.version import get_app_version
 
 BASE_DIR = Path(__file__).resolve().parents[1]
-WEB_DIST_DIR = BASE_DIR / "web_dist"
+
+
+def resolve_web_dist_dir() -> Path:
+    variant = str(os.getenv("CHATGPT2API_WEB_VARIANT") or "admin").strip().lower()
+    return BASE_DIR / "web_dist_studio" if variant == "studio" else BASE_DIR / "web_dist"
+
+
+WEB_DIST_DIR = resolve_web_dist_dir()
+STUDIO_BLOCKED_PREFIXES = ("accounts", "settings", "login", "image")
 
 
 def extract_bearer_token(authorization: str | None) -> str:
@@ -78,6 +87,15 @@ def resolve_web_asset(requested_path: str) -> Path | None:
     return None
 
 
+def should_block_studio_page(requested_path: str) -> bool:
+    if WEB_DIST_DIR.name != "web_dist_studio":
+        return False
+    clean_path = requested_path.strip("/")
+    if not clean_path:
+        return False
+    return any(clean_path == prefix or clean_path.startswith(f"{prefix}/") for prefix in STUDIO_BLOCKED_PREFIXES)
+
+
 def create_app() -> FastAPI:
     chatgpt_service = ChatGPTService(account_service)
     public_panel_service = PublicPanelService(config.public_panel_file)
@@ -117,6 +135,8 @@ def create_app() -> FastAPI:
 
     @app.api_route("/{full_path:path}", methods=["GET", "HEAD"], include_in_schema=False)
     async def serve_web(full_path: str):
+        if should_block_studio_page(full_path):
+            raise HTTPException(status_code=404, detail="Not Found")
         asset = resolve_web_asset(full_path)
         if asset is not None:
             return FileResponse(asset)
