@@ -1,0 +1,355 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Sparkles } from "lucide-react";
+import { toast } from "sonner";
+
+import { ImageComposer } from "@/app/image/components/image-composer";
+import { ImageResults } from "@/app/image/components/image-results";
+import { ImageSidebar } from "@/app/image/components/image-sidebar";
+import { ImageLightbox } from "@/components/image-lightbox";
+import type { ImageModel, PublicPanelConfig } from "@/lib/api";
+import { editPublicImage, fetchPublicPanelStatus, generatePublicImage } from "@/lib/public-panel-api";
+import {
+  clearImageConversations,
+  deleteImageConversation,
+  listImageConversations,
+  saveImageConversation,
+  type ImageConversation,
+  type ImageConversationMode,
+  type StoredImage,
+  type StoredReferenceImage,
+} from "@/store/image-conversations";
+
+const imageModelOptions: Array<{ label: string; value: ImageModel }> = [
+  { label: "gpt-image-1", value: "gpt-image-1" },
+  { label: "gpt-image-2", value: "gpt-image-2" },
+];
+
+function buildConversationTitle(prompt: string) {
+  const trimmed = prompt.trim();
+  return trimmed.length <= 5 ? trimmed : `${trimmed.slice(0, 5)}...`;
+}
+
+function formatConversationTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+async function normalizeConversationHistory(items: ImageConversation[]) {
+  const normalized = items.map((item) =>
+    item.status === "generating"
+      ? {
+          ...item,
+          status: "error" as const,
+          error: item.images.some((image) => image.status === "success") ? item.error || "生成已中断" : "页面已刷新，生成已中断",
+          images: item.images.map((image) =>
+            image.status === "loading" ? { ...image, status: "error" as const, error: "页面已刷新，生成已中断" } : image,
+          ),
+        }
+      : item,
+  );
+  await Promise.all(normalized.filter((item, index) => item !== items[index]).map((item) => saveImageConversation(item)));
+  return normalized;
+}
+
+function createId() {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("读取参考图失败"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function getStatusHint(status: PublicPanelConfig | null, statusError: string | null) {
+  if (statusError) {
+    return statusError;
+  }
+  if (!status) {
+    return null;
+  }
+  if (status.disabled_reason === "disabled") {
+    return "公开面板已关闭";
+  }
+  if (status.disabled_reason === "quota_exhausted") {
+    return "公开额度已用尽";
+  }
+  return null;
+}
+
+export default function PublicImagePageClient() {
+  const resultsViewportRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [imagePrompt, setImagePrompt] = useState("");
+  const [imageCount, setImageCount] = useState("1");
+  const [imageMode, setImageMode] = useState<ImageConversationMode>("generate");
+  const [imageModel, setImageModel] = useState<ImageModel>("gpt-image-1");
+  const [referenceImageFiles, setReferenceImageFiles] = useState<File[]>([]);
+  const [referenceImages, setReferenceImages] = useState<StoredReferenceImage[]>([]);
+  const [conversations, setConversations] = useState<ImageConversation[]>([]);
+  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+  const [generatingIds, setGeneratingIds] = useState<Set<string>>(new Set());
+  const [panelStatus, setPanelStatus] = useState<PublicPanelConfig | null>(null);
+  const [statusError, setStatusError] = useState<string | null>(null);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [lightboxIndex, setLightboxIndex] = useState(0);
+
+  const selectedConversation = useMemo(
+    () => conversations.find((item) => item.id === selectedConversationId) ?? null,
+    [conversations, selectedConversationId],
+  );
+  const parsedCount = useMemo(() => Math.max(1, Math.min(10, Number(imageCount) || 1)), [imageCount]);
+  const isSelectedGenerating = selectedConversationId !== null && generatingIds.has(selectedConversationId);
+  const lightboxImages = useMemo(
+    () =>
+      (selectedConversation?.images ?? [])
+        .filter((img): img is StoredImage & { b64_json: string } => img.status === "success" && !!img.b64_json)
+        .map((img) => ({ id: img.id, src: `data:image/png;base64,${img.b64_json}` })),
+    [selectedConversation],
+  );
+
+  const loadStatus = useCallback(async () => {
+    try {
+      const nextStatus = await fetchPublicPanelStatus();
+      setPanelStatus(nextStatus);
+      setStatusError(null);
+    } catch (error) {
+      setStatusError(error instanceof Error ? error.message : "读取公共面板状态失败");
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void listImageConversations()
+      .then(normalizeConversationHistory)
+      .then((items) => {
+        if (!cancelled) {
+          setConversations(items);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          toast.error(error instanceof Error ? error.message : "读取会话记录失败");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoadingHistory(false);
+        }
+      });
+    void loadStatus();
+    const handleFocus = () => {
+      void loadStatus();
+    };
+    window.addEventListener("focus", handleFocus);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", handleFocus);
+    };
+  }, [loadStatus]);
+
+  useEffect(() => {
+    if (selectedConversation || isSelectedGenerating) {
+      resultsViewportRef.current?.scrollTo({ top: resultsViewportRef.current.scrollHeight, behavior: "smooth" });
+    }
+  }, [selectedConversation, isSelectedGenerating]);
+
+  const openLightbox = useCallback((imageId: string) => {
+    const nextIndex = lightboxImages.findIndex((img) => img.id === imageId);
+    if (nextIndex >= 0) {
+      setLightboxIndex(nextIndex);
+      setLightboxOpen(true);
+    }
+  }, [lightboxImages]);
+
+  const persistConversation = async (conversation: ImageConversation) => {
+    setConversations((prev) => [conversation, ...prev.filter((item) => item.id !== conversation.id)].sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
+    await saveImageConversation(conversation);
+  };
+
+  const updateConversation = async (conversationId: string, updater: (current: ImageConversation | null) => ImageConversation) => {
+    let nextConversation: ImageConversation | null = null;
+    setConversations((prev) => {
+      const current = prev.find((item) => item.id === conversationId) ?? null;
+      nextConversation = updater(current);
+      return [nextConversation, ...prev.filter((item) => item.id !== conversationId)].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    });
+    if (nextConversation) {
+      await saveImageConversation(nextConversation);
+    }
+  };
+
+  const resetComposer = () => {
+    setImagePrompt("");
+    setImageCount("1");
+    setReferenceImageFiles([]);
+    setReferenceImages([]);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  };
+
+  const appendReferenceImages = useCallback(async (files: File[]) => {
+    if (files.length === 0) {
+      return;
+    }
+    const previews = await Promise.all(files.map(async (file) => ({ name: file.name, type: file.type || "image/png", dataUrl: await readFileAsDataUrl(file) })));
+    setReferenceImageFiles((prev) => [...prev, ...files]);
+    setReferenceImages((prev) => [...prev, ...previews]);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }, []);
+
+  const handleGenerateImage = async () => {
+    const blockedReason = getStatusHint(panelStatus, statusError);
+    if (blockedReason) {
+      toast.error(blockedReason);
+      return;
+    }
+    const prompt = imagePrompt.trim();
+    if (!prompt) {
+      toast.error("请输入提示词");
+      return;
+    }
+    if (imageMode === "edit" && referenceImageFiles.length === 0) {
+      toast.error("请先上传参考图");
+      return;
+    }
+
+    const conversationId = createId();
+    const draftConversation: ImageConversation = {
+      id: conversationId,
+      title: buildConversationTitle(prompt),
+      prompt,
+      model: imageModel,
+      mode: imageMode,
+      referenceImages: imageMode === "edit" ? referenceImages : [],
+      count: parsedCount,
+      images: Array.from({ length: parsedCount }, (_, index) => ({ id: `${conversationId}-${index}`, status: "loading" })),
+      createdAt: new Date().toISOString(),
+      status: "generating",
+    };
+
+    setGeneratingIds((prev) => new Set(prev).add(conversationId));
+    setSelectedConversationId(conversationId);
+    resetComposer();
+
+    try {
+      await persistConversation(draftConversation);
+      const tasks = Array.from({ length: parsedCount }, async (_, index) => {
+        const data = imageMode === "edit" && referenceImageFiles.length > 0
+          ? await editPublicImage(referenceImageFiles, prompt, imageModel)
+          : await generatePublicImage(prompt, imageModel);
+        const first = data.data?.[0];
+        if (!first?.b64_json) {
+          throw new Error(`第 ${index + 1} 张没有返回图片数据`);
+        }
+        const nextImage: StoredImage = { id: `${conversationId}-${index}`, status: "success", b64_json: first.b64_json };
+        await updateConversation(conversationId, (current) => ({
+          ...(current ?? draftConversation),
+          images: (current?.images ?? draftConversation.images).map((image) => (image.id === nextImage.id ? nextImage : image)),
+        }));
+        return nextImage;
+      });
+      const settled = await Promise.allSettled(tasks);
+      const successCount = settled.filter((item): item is PromiseFulfilledResult<StoredImage> => item.status === "fulfilled").length;
+      const failedCount = settled.length - successCount;
+      if (successCount === 0) {
+        const firstError = settled.find((item) => item.status === "rejected");
+        throw new Error(firstError?.status === "rejected" ? String(firstError.reason) : "生成图片失败");
+      }
+      await updateConversation(conversationId, (current) => ({
+        ...(current ?? draftConversation),
+        status: failedCount > 0 ? "error" : "success",
+        error: failedCount > 0 ? `其中 ${failedCount} 张生成失败` : undefined,
+      }));
+      await loadStatus();
+      toast[failedCount > 0 ? "error" : "success"](failedCount > 0 ? `已完成 ${successCount} 张，另有 ${failedCount} 张未生成成功` : imageMode === "edit" ? `已完成 ${successCount} 张图片编辑` : `已生成 ${successCount} 张图片`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : imageMode === "edit" ? "编辑图片失败" : "生成图片失败";
+      await persistConversation({ ...draftConversation, status: "error", error: message, images: draftConversation.images.map((image) => ({ ...image, status: "error", error: message })) });
+      toast.error(message);
+      await loadStatus();
+    } finally {
+      setGeneratingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(conversationId);
+        return next;
+      });
+    }
+  };
+
+  return (
+    <>
+      <section className="px-3 pt-4">
+        <div className="rounded-[32px] border border-white/80 bg-white/90 px-6 py-6 shadow-sm">
+          <div className="flex items-start gap-4">
+            <div className="flex size-12 items-center justify-center rounded-2xl bg-stone-950 text-white"><Sparkles className="size-5" /></div>
+            <div className="space-y-2">
+              <h1 className="text-3xl font-semibold tracking-tight text-stone-950">{panelStatus?.title || "匿名公共生图面板"}</h1>
+              <p className="max-w-3xl text-sm leading-6 text-stone-500">{panelStatus?.description || "无需登录，直接生成图片或上传参考图进行编辑。"}</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="mx-auto grid h-[calc(100vh-12rem)] min-h-0 w-full max-w-[1380px] grid-cols-1 gap-3 px-3 pb-6 lg:grid-cols-[240px_minmax(0,1fr)]">
+        <ImageSidebar conversations={conversations} isLoadingHistory={isLoadingHistory} generatingIds={generatingIds} selectedConversationId={selectedConversationId} onCreateDraft={() => { setSelectedConversationId(null); resetComposer(); textareaRef.current?.focus(); }} onClearHistory={() => void clearImageConversations().then(() => { setConversations([]); setSelectedConversationId(null); toast.success("已清空历史记录"); }).catch((error) => { toast.error(error instanceof Error ? error.message : "清空历史记录失败"); })} onSelectConversation={setSelectedConversationId} onDeleteConversation={(id) => void deleteImageConversation(id).then(() => { setConversations((prev) => prev.filter((item) => item.id !== id)); setSelectedConversationId((prev) => (prev === id ? null : prev)); }).catch((error) => { toast.error(error instanceof Error ? error.message : "删除会话失败"); })} formatConversationTime={formatConversationTime} />
+
+        <div className="flex min-h-0 flex-col gap-4">
+          <div ref={resultsViewportRef} className="hide-scrollbar min-h-0 flex-1 overflow-y-auto px-2 py-3 sm:px-4 sm:py-4">
+            <ImageResults selectedConversation={selectedConversation} isSelectedGenerating={isSelectedGenerating} openLightbox={openLightbox} formatConversationTime={formatConversationTime} />
+          </div>
+
+          <ImageComposer
+            mode={imageMode}
+            prompt={imagePrompt}
+            model={imageModel}
+            imageCount={imageCount}
+            availableQuota={panelStatus ? String(panelStatus.available_quota) : statusError ? "—" : "加载中"}
+            statusHint={getStatusHint(panelStatus, statusError)}
+            hasAnyGenerating={generatingIds.size > 0}
+            generatingCount={generatingIds.size}
+            referenceImages={referenceImages}
+            textareaRef={textareaRef}
+            fileInputRef={fileInputRef}
+            imageModelOptions={imageModelOptions}
+            onModeChange={setImageMode}
+            onPromptChange={setImagePrompt}
+            onModelChange={setImageModel}
+            onImageCountChange={setImageCount}
+            onSubmit={handleGenerateImage}
+            onPickReferenceImage={() => fileInputRef.current?.click()}
+            onReferenceImageChange={(files) => void (files.length === 0 ? Promise.resolve().then(() => { setReferenceImageFiles([]); setReferenceImages([]); }) : appendReferenceImages(files))}
+            onRemoveReferenceImage={(index) => {
+              setReferenceImageFiles((prev) => prev.filter((_, currentIndex) => currentIndex !== index));
+              setReferenceImages((prev) => prev.filter((_, currentIndex) => currentIndex !== index));
+            }}
+            submitBlocked={Boolean(getStatusHint(panelStatus, statusError))}
+          />
+        </div>
+      </section>
+
+      <ImageLightbox images={lightboxImages} currentIndex={lightboxIndex} open={lightboxOpen} onOpenChange={setLightboxOpen} onIndexChange={setLightboxIndex} />
+    </>
+  );
+}

@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from services.api import create_app
 from services.chatgpt_service import ChatGPTService
 from services.config import config
+from services.image_service import ImageGenerationError
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -246,6 +247,18 @@ class ChatCompletionsApiTests(unittest.TestCase):
 
         self.assertEqual(result, mocked_response)
         self.assertEqual(mocked_create.call_count, 1)
+
+    def test_generate_with_pool_surfaces_no_available_token_error(self) -> None:
+        class FakeAccountService:
+            def get_available_access_token(self) -> str:
+                raise RuntimeError("No available tokens found in data/accounts.json")
+
+        service = ChatGPTService(account_service=FakeAccountService())  # type: ignore[arg-type]
+
+        with self.assertRaises(ImageGenerationError) as context:
+            service.generate_with_pool("draw a cat", "gpt-image-1", 1)
+
+        self.assertIn("No available tokens found", str(context.exception))
 
 
 if __name__ == "__main__":

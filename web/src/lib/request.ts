@@ -5,6 +5,7 @@ import {clearStoredAuthKey, getStoredAuthKey} from "@/store/auth";
 
 type RequestConfig = AxiosRequestConfig & {
     redirectOnUnauthorized?: boolean;
+    skipAuth?: boolean;
 };
 
 const request = axios.create({
@@ -15,7 +16,7 @@ request.interceptors.request.use(async (config) => {
     const nextConfig = {...config};
     const authKey = await getStoredAuthKey();
     const headers = {...(nextConfig.headers || {})} as Record<string, string>;
-    if (authKey && !headers.Authorization) {
+    if (authKey && !headers.Authorization && !(nextConfig as RequestConfig).skipAuth) {
         headers.Authorization = `Bearer ${authKey}`;
     }
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -56,16 +57,18 @@ type RequestOptions = {
     body?: unknown;
     headers?: Record<string, string>;
     redirectOnUnauthorized?: boolean;
+    skipAuth?: boolean;
 };
 
 export async function httpRequest<T>(path: string, options: RequestOptions = {}) {
-    const {method = "GET", body, headers, redirectOnUnauthorized = true} = options;
+    const {method = "GET", body, headers, redirectOnUnauthorized = true, skipAuth = false} = options;
     const config: RequestConfig = {
         url: path,
         method,
         data: body,
         headers,
         redirectOnUnauthorized,
+        skipAuth,
     };
     const response = await request.request<T>(config);
     return response.data;
