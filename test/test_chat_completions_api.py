@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from fastapi.testclient import TestClient
 
@@ -14,6 +15,7 @@ from services.config import config
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 ROOT_CONFIG_FILE = ROOT_DIR / "config.json"
+GENERATED_IMAGE_DIR = ROOT_DIR / "data" / "generated-images"
 
 
 class ChatCompletionsApiTests(unittest.TestCase):
@@ -34,6 +36,17 @@ class ChatCompletionsApiTests(unittest.TestCase):
     def tearDownClass(cls) -> None:
         if cls._created_root_config and ROOT_CONFIG_FILE.exists():
             ROOT_CONFIG_FILE.unlink()
+
+    @contextmanager
+    def generated_image_file(self, file_name: str, content: bytes):
+        GENERATED_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+        image_path = GENERATED_IMAGE_DIR / file_name
+        image_path.write_bytes(content)
+        try:
+            yield image_path
+        finally:
+            if image_path.exists():
+                image_path.unlink()
 
     def test_chat_completions_accepts_text_requests(self) -> None:
         mocked_response = {
@@ -246,6 +259,80 @@ class ChatCompletionsApiTests(unittest.TestCase):
 
         self.assertEqual(result, mocked_response)
         self.assertEqual(mocked_create.call_count, 1)
+
+    def test_service_builds_image_chat_completion_with_markdown_urls_by_default(self) -> None:
+        service = ChatGPTService(account_service=None)  # type: ignore[arg-type]
+        with patch.object(
+            service,
+            "generate_with_pool",
+            return_value={
+                "created": 0,
+                "data": [{"url": "https://img.example.com/generated-images/cat.png", "revised_prompt": "draw a cat"}],
+            },
+        ):
+            result = service.create_chat_completion(
+                {
+                    "model": "gpt-image-2",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "draw a cat",
+                        }
+                    ],
+                }
+            )
+
+        self.assertEqual(
+            result["choices"][0]["message"]["content"],
+            "![image_1](https://img.example.com/generated-images/cat.png)",
+        )
+
+    def test_service_builds_response_image_output_with_urls_by_default(self) -> None:
+        service = ChatGPTService(account_service=None)  # type: ignore[arg-type]
+        with patch.object(
+            service,
+            "generate_with_pool",
+            return_value={
+                "created": 0,
+                "data": [{"url": "https://img.example.com/generated-images/cat.png", "revised_prompt": "draw a cat"}],
+            },
+        ):
+            result = service.create_response(
+                {
+                    "model": "gpt-5",
+                    "tools": [{"type": "image_generation"}],
+                    "input": "draw a cat",
+                }
+            )
+
+        self.assertEqual(result["output"][0]["result"], "https://img.example.com/generated-images/cat.png")
+
+    def test_images_generation_defaults_to_url_response_format(self) -> None:
+        with patch.object(
+            ChatGPTService,
+            "generate_with_pool",
+            autospec=True,
+            return_value={"created": 1, "data": [{"url": "https://img.example.com/generated-images/cat.png"}]},
+        ) as mocked_generate:
+            response = self.client.post(
+                "/v1/images/generations",
+                headers=self.headers,
+                json={
+                    "prompt": "draw a cat",
+                    "model": "gpt-image-2",
+                    "n": 1,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        mocked_generate.assert_called_once_with(ANY, "draw a cat", "gpt-image-2", 1, "url")
+
+    def test_generated_images_are_served_as_static_files(self) -> None:
+        with self.generated_image_file("test-image.png", b"png-bytes"):
+            response = self.client.get("/generated-images/test-image.png")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b"png-bytes")
 
 
 if __name__ == "__main__":

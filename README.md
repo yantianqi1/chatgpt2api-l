@@ -24,6 +24,8 @@
 ```bash
 git clone git@github.com:basketikun/chatgpt2api.git
 # 按需编辑 config.json 的密钥和 `refresh_account_interval_minute`
+# 在 .env 中设置对外可访问的服务地址，用于生成稳定图片 URL
+# CHATGPT2API_PUBLIC_BASE_URL=https://your-domain.example.com
 # 也可以直接通过环境变量 CHATGPT2API_AUTH_KEY 覆盖 auth-key
 docker compose up -d
 ```
@@ -125,7 +127,7 @@ curl http://localhost:8000/v1/images/generations \
     "model": "gpt-image-1",
     "prompt": "一只漂浮在太空里的猫",
     "n": 1,
-    "response_format": "b64_json"
+    "response_format": "url"
   }'
 ```
 
@@ -138,7 +140,7 @@ curl http://localhost:8000/v1/images/generations \
 | `model`           | 图片模型，当前可用值以 `/v1/models` 返回结果为准，推荐使用 `gpt-image-1` |
 | `prompt`          | 图片生成提示词                                            |
 | `n`               | 生成数量，当前后端限制为 `1-4`                                 |
-| `response_format` | 当前请求模型中包含该字段，默认值为 `b64_json`                       |
+| `response_format` | 支持 `url` 与 `b64_json`，默认值为 `url`                       |
 
 <br>
 </details>

@@ -15,6 +15,7 @@ export type StoredReferenceImage = {
 export type StoredImage = {
   id: string;
   status?: "loading" | "success" | "error";
+  url?: string;
   b64_json?: string;
   error?: string;
 };
@@ -48,14 +49,16 @@ function normalizeStoredImage(image: StoredImage): StoredImage {
   }
   return {
     ...image,
-    status: image.b64_json ? "success" : "loading",
+    status: image.url || image.b64_json ? "success" : "loading",
   };
 }
 
 function normalizeConversation(conversation: ImageConversation): ImageConversation {
+  const referenceImages = Array.isArray(conversation.referenceImages) ? conversation.referenceImages : [];
   return {
     ...conversation,
-    mode: conversation.mode === "edit" ? "edit" : "generate",
+    mode: referenceImages.length > 0 || conversation.mode === "edit" ? "edit" : "generate",
+    referenceImages,
     images: (conversation.images || []).map(normalizeStoredImage),
   };
 }

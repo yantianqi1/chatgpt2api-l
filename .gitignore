@@ -6,9 +6,13 @@ dist/
 wheels/
 *.egg-info
 web_dist
+web_dist_studio
 .worktrees/
 # Virtual environments
 .venv
+.env
+.env.*
+!.env.example
 .idea
 data
 config.json
@@ -17,5 +21,8 @@ test/*
 !test/__init__.py
 !test/test_config.py
 !test/test_chat_completions_api.py
+!test/test_public_panel_service.py
+!test/test_image_workflow_service.py
+!test/test_public_panel_api.py
 
 docker-compose-local.yml

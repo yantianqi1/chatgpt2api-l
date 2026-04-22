@@ -12,6 +12,7 @@ from typing import Optional
 from curl_cffi.requests import Session
 
 from services.account_service import account_service
+from services.generated_image_store import save_generated_image
 from services import proof_of_work
 
 
@@ -54,9 +55,10 @@ class ImageGenerationError(Exception):
 
 @dataclass
 class GeneratedImage:
-    b64_json: str
     revised_prompt: str
-    url: str = ""
+    data: bytes
+    mime_type: str
+    url: str
 
 
 @dataclass
@@ -615,11 +617,24 @@ def _fetch_download_url(session: Session, access_token: str, device_id: str, con
     return str((response.json() or {}).get("download_url") or "")
 
 
-def _download_as_base64(session: Session, download_url: str) -> str:
+def _download_image(session: Session, download_url: str) -> tuple[bytes, str]:
     response = session.get(download_url, timeout=60)
     if not response.ok or not response.content:
         raise ImageGenerationError("download image failed")
-    return base64.b64encode(response.content).decode("ascii")
+    content_type = str(response.headers.get("content-type") or "image/png").split(";")[0].strip() or "image/png"
+    return response.content, content_type
+
+
+def _build_image_payload(image: GeneratedImage, response_format: str) -> dict[str, str]:
+    if response_format == "b64_json":
+        return {
+            "b64_json": base64.b64encode(image.data).decode("ascii"),
+            "revised_prompt": image.revised_prompt,
+        }
+    return {
+        "url": image.url,
+        "revised_prompt": image.revised_prompt,
+    }
 
 
 def _resolve_upstream_model(access_token: str, requested_model: str) -> str:
@@ -634,7 +649,12 @@ def _resolve_upstream_model(access_token: str, requested_model: str) -> str:
     return str(requested_model or DEFAULT_MODEL).strip() or DEFAULT_MODEL
 
 
-def generate_image_result(access_token: str, prompt: str, model: str = DEFAULT_MODEL) -> dict:
+def generate_image_result(
+    access_token: str,
+    prompt: str,
+    model: str = DEFAULT_MODEL,
+    response_format: str = "url",
+) -> dict:
     prompt = str(prompt or "").strip()
     access_token = str(access_token or "").strip()
     if not prompt:
@@ -684,15 +704,17 @@ def generate_image_result(access_token: str, prompt: str, model: str = DEFAULT_M
         download_url = _fetch_download_url(session, access_token, device_id, actual_conversation_id, first_file_id)
         if not download_url:
             raise ImageGenerationError("failed to get download url")
+        image_data, mime_type = _download_image(session, download_url)
         result = GeneratedImage(
-            b64_json=_download_as_base64(session, download_url),
             revised_prompt=prompt,
-            url=download_url,
+            data=image_data,
+            mime_type=mime_type,
+            url=save_generated_image(image_data, mime_type),
         )
         print(f"[image-upstream] success token={access_token[:12]}... images=1")
         return {
             "created": time.time_ns() // 1_000_000_000,
-            "data": [{"b64_json": result.b64_json, "revised_prompt": result.revised_prompt}],
+            "data": [_build_image_payload(result, response_format)],
         }
     except Exception as exc:
         print(f"[image-upstream] fail token={access_token[:12]}... error={exc}")
@@ -741,6 +763,7 @@ def edit_image_result(
     prompt: str,
     images: list[tuple[bytes, str, str]],
     model: str = DEFAULT_MODEL,
+    response_format: str = "url",
 ) -> dict:
     prompt = str(prompt or "").strip()
     access_token = str(access_token or "").strip()
@@ -818,15 +841,17 @@ def edit_image_result(
         download_url = _fetch_download_url(session, access_token, device_id, actual_conversation_id, first_file_id)
         if not download_url:
             raise ImageGenerationError("failed to get download url")
+        image_data, mime_type = _download_image(session, download_url)
         result = GeneratedImage(
-            b64_json=_download_as_base64(session, download_url),
             revised_prompt=prompt,
-            url=download_url,
+            data=image_data,
+            mime_type=mime_type,
+            url=save_generated_image(image_data, mime_type),
         )
         print(f"[image-edit-upstream] success token={access_token[:12]}... inputs={len(uploaded_images)}")
         return {
             "created": time.time_ns() // 1_000_000_000,
-            "data": [{"b64_json": result.b64_json, "revised_prompt": result.revised_prompt}],
+            "data": [_build_image_payload(result, response_format)],
         }
     except Exception as exc:
         print(f"[image-edit-upstream] fail token={access_token[:12]}... error={exc}")

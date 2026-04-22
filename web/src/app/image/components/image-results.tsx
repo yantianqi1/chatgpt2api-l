@@ -1,22 +1,28 @@
 "use client";
-import { LoaderCircle } from "lucide-react";
+import { LoaderCircle, RefreshCcw } from "lucide-react";
 import { useMemo, useState } from "react";
 
+import { getImageSrc } from "@/app/image/lib/image-studio";
 import { ImageLightbox } from "@/components/image-lightbox";
+import { Button } from "@/components/ui/button";
 import type { ImageConversation, StoredImage } from "@/store/image-conversations";
 
 type ImageResultsProps = {
   selectedConversation: ImageConversation | null;
   isSelectedGenerating: boolean;
+  isRegenerating: boolean;
   openLightbox: (imageId: string) => void;
   formatConversationTime: (value: string) => string;
+  onRegenerate: () => void | Promise<void>;
 };
 
 export function ImageResults({
   selectedConversation,
   isSelectedGenerating,
+  isRegenerating,
   openLightbox,
   formatConversationTime,
+  onRegenerate,
 }: ImageResultsProps) {
   const [referenceLightboxOpen, setReferenceLightboxOpen] = useState(false);
   const [referenceLightboxIndex, setReferenceLightboxIndex] = useState(0);
@@ -29,6 +35,21 @@ export function ImageResults({
       })),
     [selectedConversation?.referenceImages],
   );
+  const imageStats = useMemo(() => {
+    const images = selectedConversation?.images ?? [];
+    return images.reduce(
+      (stats, image) => {
+        if (image.status === "success") {
+          return { ...stats, success: stats.success + 1 };
+        }
+        if (image.status === "error") {
+          return { ...stats, error: stats.error + 1 };
+        }
+        return { ...stats, loading: stats.loading + 1 };
+      },
+      { success: 0, error: 0, loading: 0 },
+    );
+  }, [selectedConversation?.images]);
 
   if (!selectedConversation) {
     return (
@@ -104,16 +125,35 @@ export function ImageResults({
 
       <div className="flex justify-start">
         <div className="w-full p-1">
-          <div className="mb-4 flex flex-wrap items-center gap-2 text-xs text-stone-500">
-            <span className="rounded-full bg-stone-100 px-3 py-1">{selectedConversation.mode === "edit" ? "编辑图" : "文生图"}</span>
-            <span className="rounded-full bg-stone-100 px-3 py-1">{selectedConversation.model}</span>
-            <span className="rounded-full bg-stone-100 px-3 py-1">{selectedConversation.count} 张</span>
-            <span className="rounded-full bg-stone-100 px-3 py-1">
-              {formatConversationTime(selectedConversation.createdAt)}
-            </span>
-            {isSelectedGenerating && (
-              <span className="rounded-full bg-amber-50 px-3 py-1 text-amber-700">处理中</span>
-            )}
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-stone-500">
+              <span className="rounded-full bg-stone-100 px-3 py-1">{selectedConversation.mode === "edit" ? "编辑图" : "文生图"}</span>
+              <span className="rounded-full bg-stone-100 px-3 py-1">{selectedConversation.model}</span>
+              <span className="rounded-full bg-stone-100 px-3 py-1">{selectedConversation.count} 张</span>
+              <span className="rounded-full bg-stone-100 px-3 py-1">
+                进度 {imageStats.success + imageStats.error}/{selectedConversation.count}
+              </span>
+              <span className="rounded-full bg-stone-100 px-3 py-1">
+                {formatConversationTime(selectedConversation.createdAt)}
+              </span>
+              {imageStats.error > 0 ? (
+                <span className="rounded-full bg-rose-50 px-3 py-1 text-rose-700">失败 {imageStats.error}</span>
+              ) : null}
+              {isSelectedGenerating ? (
+                <span className="rounded-full bg-amber-50 px-3 py-1 text-amber-700">处理中</span>
+              ) : null}
+            </div>
+
+            <Button
+              type="button"
+              variant="outline"
+              className="h-9 rounded-full border-stone-200 bg-white px-4 text-sm text-stone-700"
+              onClick={() => void onRegenerate()}
+              disabled={isSelectedGenerating || isRegenerating}
+            >
+              {isRegenerating ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCcw className="size-4" />}
+              重新生成
+            </Button>
           </div>
 
           {selectedConversation.status === "error" && selectedConversation.images.length === 0 ? (
@@ -152,11 +192,13 @@ function ImageResultCard({
   index: number;
   onOpen: (imageId: string) => void;
 }) {
-  if (image.status === "success" && image.b64_json) {
+  const imageSrc = getImageSrc(image);
+
+  if (image.status === "success" && imageSrc) {
     return (
       <button type="button" onClick={() => onOpen(image.id)} className="group block w-full cursor-zoom-in">
         <img
-          src={`data:image/png;base64,${image.b64_json}`}
+          src={imageSrc}
           alt={`Generated result ${index + 1}`}
           className="block h-auto w-full transition duration-200 group-hover:brightness-90"
         />
