@@ -82,6 +82,79 @@ class ChatCompletionsApiTests(unittest.TestCase):
         self.assertEqual(response.json(), mocked_response)
         self.assertEqual(mocked_create.call_count, 1)
 
+    def test_chat_completions_accepts_text_stream_requests(self) -> None:
+        with patch.object(ChatGPTService, "generate_text_with_pool", return_value="hello") as mocked_generate:
+            response = self.client.post(
+                "/v1/chat/completions",
+                headers=self.headers,
+                json={
+                    "model": "gpt-4o",
+                    "stream": True,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "say hello",
+                        }
+                    ],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["choices"][0]["message"]["content"], "hello")
+        self.assertEqual(mocked_generate.call_count, 1)
+
+    def test_chat_completions_accepts_image_stream_requests(self) -> None:
+        mocked_image_result = {
+            "created": 0,
+            "data": [{"b64_json": "abc"}],
+        }
+
+        with patch.object(ChatGPTService, "generate_with_pool", return_value=mocked_image_result) as mocked_generate:
+            response = self.client.post(
+                "/v1/chat/completions",
+                headers=self.headers,
+                json={
+                    "model": "gpt-image-2",
+                    "stream": True,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": "[Start a new Chat]",
+                        },
+                        {
+                            "role": "user",
+                            "content": "draw a cat",
+                        },
+                    ],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("data:image/png;base64,abc", response.json()["choices"][0]["message"]["content"])
+        self.assertEqual(mocked_generate.call_count, 1)
+
+    def test_responses_accepts_stream_requests(self) -> None:
+        mocked_image_result = {
+            "created": 0,
+            "data": [{"b64_json": "abc", "revised_prompt": "draw a cat"}],
+        }
+
+        with patch.object(ChatGPTService, "generate_with_pool", return_value=mocked_image_result) as mocked_generate:
+            response = self.client.post(
+                "/v1/responses",
+                headers=self.headers,
+                json={
+                    "model": "gpt-5",
+                    "stream": True,
+                    "tools": [{"type": "image_generation"}],
+                    "input": "draw a cat",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["output"][0]["result"], "abc")
+        self.assertEqual(mocked_generate.call_count, 1)
+
     def test_page_routes_accept_head_requests(self) -> None:
         response = self.client.head("/image/")
         self.assertNotEqual(response.status_code, 405)

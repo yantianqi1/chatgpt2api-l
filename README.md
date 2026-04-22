@@ -205,7 +205,7 @@ curl http://localhost:8000/v1/chat/completions \
 | `model`    | 图片模型，默认按图片生成场景处理     |
 | `messages` | 消息数组，需要是图片相关请求内容     |
 | `n`        | 生成数量，按当前实现解析为图片数量    |
-| `stream`   | 当前不支持，传入 `true` 会被拒绝 |
+| `stream`   | 当前仅做兼容接收，传入 `true` 仍按非流式返回普通 JSON |
 
 <br>
 </details>
@@ -241,7 +241,7 @@ curl http://localhost:8000/v1/responses \
 | `model`  | 响应中会回显该模型字段，但图片生成当前仍走图片生成兼容逻辑 |
 | `input`  | 输入内容，需要能解析出图片生成提示词            |
 | `tools`  | 必须包含 `image_generation` 工具请求  |
-| `stream` | 当前不支持，传入 `true` 会被拒绝          |
+| `stream` | 当前仅做兼容接收，传入 `true` 仍按非流式返回普通 JSON |
 
 <br>
 </details>
