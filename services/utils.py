@@ -7,6 +7,7 @@ from fastapi import HTTPException
 
 
 IMAGE_MODELS = {"gpt-image-1", "gpt-image-2"}
+CHAT_ROLES = {"system", "user", "assistant"}
 
 
 def is_image_chat_request(body: dict[str, object]) -> bool:
@@ -153,6 +154,35 @@ def extract_chat_prompt(body: dict[str, object]) -> str:
     return "\n".join(prompt_parts).strip()
 
 
+def extract_text_chat_prompt(body: dict[str, object]) -> str:
+    direct_prompt = str(body.get("prompt") or "").strip()
+    if direct_prompt:
+        return direct_prompt
+
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return ""
+
+    prompt_parts: list[str] = []
+    transcript_parts: list[str] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "").strip().lower()
+        if role not in CHAT_ROLES:
+            continue
+        text = extract_prompt_from_message_content(message.get("content"))
+        if not text:
+            continue
+        if role == "user":
+            prompt_parts.append(text)
+        transcript_parts.append(f"{role}: {text}")
+
+    if len(transcript_parts) == 1 and len(prompt_parts) == 1:
+        return prompt_parts[0]
+    return "\n\n".join(transcript_parts).strip()
+
+
 def parse_image_count(raw_value: object) -> int:
     try:
         value = int(raw_value or 1)
@@ -195,6 +225,35 @@ def build_chat_image_completion(
                 "message": {
                     "role": "assistant",
                     "content": text_content,
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        },
+    }
+
+
+def build_text_chat_completion(
+    model: str,
+    text: str,
+) -> dict[str, object]:
+    created = int(time.time())
+    normalized_text = str(text or "").strip()
+    return {
+        "id": f"chatcmpl-{uuid.uuid4().hex}",
+        "object": "chat.completion",
+        "created": created,
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": normalized_text,
                 },
                 "finish_reason": "stop",
             }

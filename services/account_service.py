@@ -59,6 +59,12 @@ class AccountService:
             return False
         return int(account.get("quota") or 0) > 0
 
+    @staticmethod
+    def _is_chat_account_available(account: dict) -> bool:
+        if not isinstance(account, dict):
+            return False
+        return account.get("status") not in {"禁用", "异常"}
+
     def _decode_access_token_payload(self, access_token: str) -> dict[str, Any]:
         parts = self._clean_token(access_token).split(".")
         if len(parts) < 2:
@@ -240,6 +246,22 @@ class AccountService:
             self._index += 1
             return access_token
 
+    def _pick_next_chat_candidate_token(self, excluded_tokens: set[str] | None = None) -> str:
+        excluded = {self._clean_token(token) for token in (excluded_tokens or set()) if self._clean_token(token)}
+        with self._lock:
+            tokens = [
+                token
+                for item in self._accounts
+                if self._is_chat_account_available(item)
+                and (token := self._clean_token(item.get("access_token")))
+                and token not in excluded
+            ]
+            if not tokens:
+                raise RuntimeError(f"No chat tokens found in {self.store_file}")
+            access_token = tokens[self._index % len(tokens)]
+            self._index += 1
+            return access_token
+
     def refresh_account_state(self, access_token: str) -> dict | None:
         try:
             remote_info = self.fetch_remote_info(access_token)
@@ -268,6 +290,19 @@ class AccountService:
             print(
                 f"[account-available] skip token={access_token[:12]}... "
                 f"quota={account.get('quota') if account else 'unknown'} "
+                f"status={account.get('status') if account else 'unknown'}"
+            )
+
+    def get_chat_access_token(self) -> str:
+        attempted_tokens: set[str] = set()
+        while True:
+            access_token = self._pick_next_chat_candidate_token(excluded_tokens=attempted_tokens)
+            attempted_tokens.add(access_token)
+            account = self.refresh_account_state(access_token)
+            if self._is_chat_account_available(account or {}):
+                return access_token
+            print(
+                f"[account-chat] skip token={access_token[:12]}... "
                 f"status={account.get('status') if account else 'unknown'}"
             )
 
@@ -383,6 +418,26 @@ class AccountService:
                     next_item["status"] = "正常"
             else:
                 next_item["fail"] = int(next_item.get("fail") or 0) + 1
+            account = self._normalize_account(next_item)
+            if account is None:
+                return None
+            self._accounts[index] = account
+            self._save_accounts()
+            return dict(account)
+        return None
+
+    def mark_chat_result(self, access_token: str, success: bool) -> dict | None:
+        access_token = self._clean_token(access_token)
+        if not access_token:
+            return None
+        with self._lock:
+            index = self._find_account_index(access_token)
+            if index < 0:
+                return None
+            next_item = dict(self._accounts[index])
+            next_item["last_used_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            counter = "success" if success else "fail"
+            next_item[counter] = int(next_item.get(counter) or 0) + 1
             account = self._normalize_account(next_item)
             if account is None:
                 return None

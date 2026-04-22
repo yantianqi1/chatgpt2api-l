@@ -12,6 +12,9 @@ web_dist
 data
 config.json
 edit
-test
+test/*
+!test/__init__.py
+!test/test_config.py
+!test/test_chat_completions_api.py
 
 docker-compose-local.yml

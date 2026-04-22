@@ -6,10 +6,13 @@ from fastapi import HTTPException
 
 from services.account_service import AccountService
 from services.image_service import ImageGenerationError, edit_image_result, generate_image_result, is_token_invalid_error
+from services.text_service import TextGenerationError, generate_text_result
 from services.utils import (
     build_chat_image_completion,
+    build_text_chat_completion,
     extract_chat_image,
     extract_chat_prompt,
+    extract_text_chat_prompt,
     extract_image_from_message_content,
     extract_response_prompt,
     has_response_image_generation_tool,
@@ -177,6 +180,57 @@ class ChatGPTService:
             raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
 
         return build_chat_image_completion(model, prompt, image_result)
+
+    def generate_text_with_pool(self, prompt: str, model: str) -> str:
+        while True:
+            try:
+                request_token = self.account_service.get_chat_access_token()
+            except RuntimeError as exc:
+                print(f"[chat-text] stop error={exc}")
+                raise TextGenerationError(str(exc)) from exc
+
+            print(f"[chat-text] start pooled token={request_token[:12]}... model={model}")
+            try:
+                result = generate_text_result(request_token, prompt, model)
+                account = self.account_service.mark_chat_result(request_token, success=True)
+                print(
+                    f"[chat-text] success pooled token={request_token[:12]}... "
+                    f"status={account.get('status') if account else 'unknown'}"
+                )
+                return result
+            except TextGenerationError as exc:
+                account = self.account_service.mark_chat_result(request_token, success=False)
+                message = str(exc)
+                print(
+                    f"[chat-text] fail pooled token={request_token[:12]}... "
+                    f"error={message} status={account.get('status') if account else 'unknown'}"
+                )
+                if is_token_invalid_error(message):
+                    self.account_service.remove_token(request_token)
+                    print(f"[chat-text] remove invalid token={request_token[:12]}...")
+                    continue
+                raise
+
+    def create_text_completion(self, body: dict[str, object]) -> dict[str, object]:
+        if bool(body.get("stream")):
+            raise HTTPException(status_code=400, detail={"error": "stream is not supported"})
+
+        model = str(body.get("model") or "").strip()
+        prompt = extract_text_chat_prompt(body)
+        if not prompt:
+            raise HTTPException(status_code=400, detail={"error": "prompt is required"})
+
+        try:
+            text = self.generate_text_with_pool(prompt, model)
+        except TextGenerationError as exc:
+            raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
+
+        return build_text_chat_completion(model or "auto", text)
+
+    def create_chat_completion(self, body: dict[str, object]) -> dict[str, object]:
+        if is_image_chat_request(body):
+            return self.create_image_completion(body)
+        return self.create_text_completion(body)
 
     def create_response(self, body: dict[str, object]) -> dict[str, object]:
         if bool(body.get("stream")):
