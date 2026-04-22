@@ -7,7 +7,7 @@ from threading import Event, Thread
 from fastapi import APIRouter, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from services.account_service import account_service
@@ -16,6 +16,7 @@ from services.config import config
 from services.cpa_service import cpa_config, cpa_import_service, list_remote_files
 
 from services.image_service import ImageGenerationError
+from services.streaming import iter_chat_completion_sse, iter_response_sse
 from services.version import get_app_version
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -311,12 +312,28 @@ def create_app() -> FastAPI:
     @router.post("/v1/chat/completions")
     async def create_chat_completion(body: ChatCompletionRequest, authorization: str | None = Header(default=None)):
         require_auth_key(authorization)
-        return await run_in_threadpool(chatgpt_service.create_chat_completion, body.model_dump(mode="python"))
+        payload = body.model_dump(mode="python")
+        completion = await run_in_threadpool(chatgpt_service.create_chat_completion, payload)
+        if bool(payload.get("stream")):
+            return StreamingResponse(
+                iter_chat_completion_sse(completion),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+        return completion
 
     @router.post("/v1/responses")
     async def create_response(body: ResponseCreateRequest, authorization: str | None = Header(default=None)):
         require_auth_key(authorization)
-        return await run_in_threadpool(chatgpt_service.create_response, body.model_dump(mode="python"))
+        payload = body.model_dump(mode="python")
+        response = await run_in_threadpool(chatgpt_service.create_response, payload)
+        if bool(payload.get("stream")):
+            return StreamingResponse(
+                iter_response_sse(response),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+        return response
 
     # ── CPA multi-pool endpoints ────────────────────────────────────
 

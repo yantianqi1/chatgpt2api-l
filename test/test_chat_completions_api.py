@@ -82,7 +82,7 @@ class ChatCompletionsApiTests(unittest.TestCase):
         self.assertEqual(response.json(), mocked_response)
         self.assertEqual(mocked_create.call_count, 1)
 
-    def test_chat_completions_accepts_text_stream_requests_as_json(self) -> None:
+    def test_chat_completions_streams_text_requests_as_sse(self) -> None:
         mocked_response = {
             "id": "chatcmpl-test",
             "object": "chat.completion",
@@ -117,11 +117,13 @@ class ChatCompletionsApiTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("application/json", response.headers["content-type"])
-        self.assertEqual(response.json(), mocked_response)
+        self.assertIn("text/event-stream", response.headers["content-type"])
+        self.assertIn('"object":"chat.completion.chunk"', response.text)
+        self.assertIn('"content":"hello"', response.text)
+        self.assertIn("data: [DONE]", response.text)
         self.assertEqual(mocked_create.call_count, 1)
 
-    def test_chat_completions_accepts_image_stream_requests_as_json(self) -> None:
+    def test_chat_completions_streams_image_requests_as_sse(self) -> None:
         mocked_response = {
             "id": "chatcmpl-image",
             "object": "chat.completion",
@@ -160,17 +162,32 @@ class ChatCompletionsApiTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("application/json", response.headers["content-type"])
-        self.assertEqual(response.json(), mocked_response)
+        self.assertIn("text/event-stream", response.headers["content-type"])
+        self.assertIn("data:image/png;base64,abc", response.text)
+        self.assertIn("data: [DONE]", response.text)
         self.assertEqual(mocked_create.call_count, 1)
 
-    def test_responses_accepts_stream_requests(self) -> None:
-        mocked_image_result = {
-            "created": 0,
-            "data": [{"b64_json": "abc", "revised_prompt": "draw a cat"}],
+    def test_responses_stream_requests_as_sse(self) -> None:
+        mocked_response = {
+            "id": "resp_1",
+            "object": "response",
+            "created_at": 0,
+            "status": "completed",
+            "error": None,
+            "incomplete_details": None,
+            "model": "gpt-5",
+            "output": [
+                {
+                    "id": "ig_1",
+                    "type": "image_generation_call",
+                    "status": "completed",
+                    "result": "abc",
+                    "revised_prompt": "draw a cat",
+                }
+            ],
         }
 
-        with patch.object(ChatGPTService, "generate_with_pool", return_value=mocked_image_result) as mocked_generate:
+        with patch.object(ChatGPTService, "create_response", return_value=mocked_response) as mocked_create:
             response = self.client.post(
                 "/v1/responses",
                 headers=self.headers,
@@ -183,8 +200,11 @@ class ChatCompletionsApiTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["output"][0]["result"], "abc")
-        self.assertEqual(mocked_generate.call_count, 1)
+        self.assertIn("text/event-stream", response.headers["content-type"])
+        self.assertIn('"type":"response.completed"', response.text)
+        self.assertIn('"result":"abc"', response.text)
+        self.assertIn("data: [DONE]", response.text)
+        self.assertEqual(mocked_create.call_count, 1)
 
     def test_page_routes_accept_head_requests(self) -> None:
         response = self.client.head("/image/")
