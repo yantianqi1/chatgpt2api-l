@@ -5,6 +5,7 @@ from typing import Iterable
 from fastapi import HTTPException
 
 from services.account_service import AccountService
+from services.image_workflow_service import ImageWorkflowService
 from services.image_service import ImageGenerationError, edit_image_result, generate_image_result, is_token_invalid_error
 from services.text_service import TextGenerationError, generate_text_result
 from services.utils import (
@@ -46,6 +47,7 @@ def _extract_response_image(input_value: object) -> tuple[bytes, str] | None:
 class ChatGPTService:
     def __init__(self, account_service: AccountService):
         self.account_service = account_service
+        self.image_workflow_service = ImageWorkflowService(quota_gateway=None, image_backend=self)
 
     def generate_with_pool(self, prompt: str, model: str, n: int):
         created = None
@@ -173,9 +175,9 @@ class ChatGPTService:
         try:
             if image_info:
                 image_data, mime_type = image_info
-                image_result = self.edit_with_pool(prompt, [(image_data, "image.png", mime_type)], model, n)
+                image_result = self.image_workflow_service.edit_admin(prompt, [(image_data, "image.png", mime_type)], model, n)
             else:
-                image_result = self.generate_with_pool(prompt, model, n)
+                image_result = self.image_workflow_service.generate_admin(prompt, model, n)
         except ImageGenerationError as exc:
             raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
 
@@ -251,9 +253,11 @@ class ChatGPTService:
         try:
             if image_info:
                 image_data, mime_type = image_info
-                image_result = self.edit_with_pool(prompt, [(image_data, "image.png", mime_type)], "gpt-image-1", 1)
+                image_result = self.image_workflow_service.edit_admin(
+                    prompt, [(image_data, "image.png", mime_type)], "gpt-image-1", 1
+                )
             else:
-                image_result = self.generate_with_pool(prompt, "gpt-image-1", 1)
+                image_result = self.image_workflow_service.generate_admin(prompt, "gpt-image-1", 1)
         except ImageGenerationError as exc:
             raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
 

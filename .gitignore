@@ -18,5 +18,7 @@ test/*
 !test/test_config.py
 !test/test_chat_completions_api.py
 !test/test_public_panel_service.py
+!test/test_image_workflow_service.py
+!test/test_public_panel_api.py
 
 docker-compose-local.yml
