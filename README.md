@@ -23,11 +23,13 @@
 
 ```bash
 git clone git@github.com:basketikun/chatgpt2api.git
+# 复制环境变量模板并按实际部署地址修改
+cp .env.example .env
 # 按需编辑 config.json 的密钥和 `refresh_account_interval_minute`
 # 在 .env 中设置对外可访问的服务地址，用于生成稳定图片 URL
 # CHATGPT2API_PUBLIC_BASE_URL=https://your-domain.example.com
 # 也可以直接通过环境变量 CHATGPT2API_AUTH_KEY 覆盖 auth-key
-docker compose up -d
+docker compose up -d --build
 ```
 
 ## 功能

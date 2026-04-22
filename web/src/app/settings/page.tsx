@@ -17,6 +17,8 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { ImageRuntimeSettingsCard, type ImageRuntimeSettingsDraft } from "@/app/settings/components/image-runtime-settings-card";
+import { PublicPanelSettings } from "@/app/settings/components/public-panel-settings";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -42,13 +44,20 @@ import {
   deleteCPAPool,
   fetchCPAPoolFiles,
   fetchCPAPools,
+  fetchImageSettings,
   startCPAImport,
   updateCPAPool,
+  updateImageSettings,
   type CPAPool,
   type CPARemoteFile,
 } from "@/lib/api";
 
 const PAGE_SIZE_OPTIONS = ["50", "100", "200"] as const;
+const DEFAULT_IMAGE_SETTINGS_DRAFT: ImageRuntimeSettingsDraft = {
+  defaultModel: "gpt-image-2",
+  maxCountPerRequest: "4",
+  autoRetryTimes: "1",
+};
 
 function normalizeFiles(items: CPARemoteFile[]) {
   const seen = new Set<string>();
@@ -73,6 +82,9 @@ export default function SettingsPage() {
 
   const [pools, setPools] = useState<CPAPool[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [imageSettingsDraft, setImageSettingsDraft] = useState<ImageRuntimeSettingsDraft>(DEFAULT_IMAGE_SETTINGS_DRAFT);
+  const [isLoadingImageSettings, setIsLoadingImageSettings] = useState(true);
+  const [isSavingImageSettings, setIsSavingImageSettings] = useState(false);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingPool, setEditingPool] = useState<CPAPool | null>(null);
@@ -94,6 +106,22 @@ export default function SettingsPage() {
   const [pageSize, setPageSize] = useState<(typeof PAGE_SIZE_OPTIONS)[number]>("100");
   const [isStartingImport, setIsStartingImport] = useState(false);
 
+  const loadImageRuntimeSettings = async () => {
+    setIsLoadingImageSettings(true);
+    try {
+      const settings = await fetchImageSettings();
+      setImageSettingsDraft({
+        defaultModel: settings.default_model,
+        maxCountPerRequest: String(settings.max_count_per_request),
+        autoRetryTimes: String(settings.auto_retry_times),
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "加载图片设置失败");
+    } finally {
+      setIsLoadingImageSettings(false);
+    }
+  };
+
   const loadPools = async () => {
     setIsLoading(true);
     try {
@@ -112,6 +140,7 @@ export default function SettingsPage() {
     }
     didLoadRef.current = true;
     void loadPools();
+    void loadImageRuntimeSettings();
   }, []);
 
   useEffect(() => {
@@ -294,6 +323,27 @@ export default function SettingsPage() {
     }
   };
 
+  const handleSaveImageSettings = async () => {
+    setIsSavingImageSettings(true);
+    try {
+      const settings = await updateImageSettings({
+        default_model: imageSettingsDraft.defaultModel,
+        max_count_per_request: Number(imageSettingsDraft.maxCountPerRequest),
+        auto_retry_times: Number(imageSettingsDraft.autoRetryTimes),
+      });
+      setImageSettingsDraft({
+        defaultModel: settings.default_model,
+        maxCountPerRequest: String(settings.max_count_per_request),
+        autoRetryTimes: String(settings.auto_retry_times),
+      });
+      toast.success("图片设置已保存");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "保存图片设置失败");
+    } finally {
+      setIsSavingImageSettings(false);
+    }
+  };
+
   return (
     <>
       <section className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -304,6 +354,16 @@ export default function SettingsPage() {
       </section>
 
       <section className="space-y-6">
+        <ImageRuntimeSettingsCard
+          draft={imageSettingsDraft}
+          isLoading={isLoadingImageSettings}
+          isSaving={isSavingImageSettings}
+          onDraftChange={(updates) => setImageSettingsDraft((prev) => ({ ...prev, ...updates }))}
+          onSave={handleSaveImageSettings}
+        />
+
+        <PublicPanelSettings />
+
         <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
           <CardContent className="space-y-6 p-6">
             <div className="flex items-start justify-between">

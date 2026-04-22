@@ -1,14 +1,12 @@
-"use client";
+import { redirect } from "next/navigation";
 
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import PublicImagePageClient from "@/app/public-image-page-client";
+import { isStudioVariant } from "@/lib/app-variant";
 
 export default function HomePage() {
-  const router = useRouter();
+  if (isStudioVariant()) {
+    return <PublicImagePageClient />;
+  }
 
-  useEffect(() => {
-    router.replace("/accounts");
-  }, [router]);
-
-  return null;
+  redirect("/accounts");
 }

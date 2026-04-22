@@ -1,5 +1,5 @@
 "use client";
-import { ArrowUp, ImagePlus, LoaderCircle, X } from "lucide-react";
+import { ArrowUp, ImagePlus, X } from "lucide-react";
 import { useMemo, useState, type ClipboardEvent, type RefObject } from "react";
 
 import { ImageLightbox } from "@/components/image-lightbox";
@@ -15,21 +15,17 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import type { ImageModel } from "@/lib/api";
 import type { ImageConversationMode } from "@/store/image-conversations";
-import { cn } from "@/lib/utils";
 
 type ImageComposerProps = {
   mode: ImageConversationMode;
   prompt: string;
   model: ImageModel;
   imageCount: string;
-  availableQuota: string;
-  hasAnyGenerating: boolean;
-  generatingCount: number;
+  maxImageCount: number;
   referenceImages: Array<{ name: string; dataUrl: string }>;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   fileInputRef: RefObject<HTMLInputElement | null>;
   imageModelOptions: Array<{ label: string; value: ImageModel }>;
-  onModeChange: (value: ImageConversationMode) => void;
   onPromptChange: (value: string) => void;
   onModelChange: (value: ImageModel) => void;
   onImageCountChange: (value: string) => void;
@@ -44,14 +40,11 @@ export function ImageComposer({
   prompt,
   model,
   imageCount,
-  availableQuota,
-  hasAnyGenerating,
-  generatingCount,
+  maxImageCount,
   referenceImages,
   textareaRef,
   fileInputRef,
   imageModelOptions,
-  onModeChange,
   onPromptChange,
   onModelChange,
   onImageCountChange,
@@ -68,10 +61,6 @@ export function ImageComposer({
   );
 
   const handleTextareaPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
-    if (mode !== "edit") {
-      return;
-    }
-
     const imageFiles = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"));
     if (imageFiles.length === 0) {
       return;
@@ -84,20 +73,18 @@ export function ImageComposer({
   return (
     <div className="shrink-0 flex justify-center">
       <div style={{ width: "min(980px, 100%)" }}>
-        {mode === "edit" && (
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            multiple
-            className="hidden"
-            onChange={(event) => {
-              void onReferenceImageChange(Array.from(event.target.files || []));
-            }}
-          />
-        )}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          className="hidden"
+          onChange={(event) => {
+            void onReferenceImageChange(Array.from(event.target.files || []));
+          }}
+        />
 
-        {mode === "edit" && referenceImages.length > 0 ? (
+        {referenceImages.length > 0 ? (
           <div className="mb-3 flex flex-wrap gap-2 px-1">
             {referenceImages.map((image, index) => (
               <div key={`${image.name}-${index}`} className="relative size-16">
@@ -164,24 +151,18 @@ export function ImageComposer({
             <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-white via-white/95 to-transparent px-4 pb-4 pt-6 sm:px-6">
               <div className="flex items-end justify-between gap-3">
                 <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3">
-                  {mode === "edit" && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="h-10 rounded-full border-stone-200 bg-white px-4 text-sm font-medium text-stone-700 shadow-none"
-                      onClick={onPickReferenceImage}
-                    >
-                      <ImagePlus className="size-4" />
-                      {referenceImages.length > 0 ? "继续添加参考图" : "上传参考图"}
-                    </Button>
-                  )}
-                  <div className="rounded-full bg-stone-100 px-3 py-2 text-xs font-medium text-stone-600">剩余额度 {availableQuota}</div>
-                  {hasAnyGenerating && (
-                    <div className="flex items-center gap-1.5 rounded-full bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">
-                      <LoaderCircle className="size-3 animate-spin" />
-                      {generatingCount} 个任务进行中
-                    </div>
-                  )}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-10 rounded-full border-stone-200 bg-white px-4 text-sm font-medium text-stone-700 shadow-none"
+                    onClick={onPickReferenceImage}
+                  >
+                    <ImagePlus className="size-4" />
+                    {referenceImages.length > 0 ? "继续添加参考图" : "上传图片"}
+                  </Button>
+                  <div className="rounded-full bg-stone-100 px-3 py-2 text-xs font-medium text-stone-600">
+                    {mode === "edit" ? "当前模式 编辑图" : "当前模式 文生图"}
+                  </div>
                   <Select value={model} onValueChange={(value) => onModelChange(value as ImageModel)}>
                     <SelectTrigger className="h-10 w-[164px] rounded-full border-stone-200 bg-white text-sm font-medium text-stone-700 shadow-none focus-visible:ring-0">
                       <SelectValue />
@@ -199,27 +180,20 @@ export function ImageComposer({
                     <Input
                       type="number"
                       min="1"
-                      max="10"
+                      max={String(maxImageCount)}
                       step="1"
                       value={imageCount}
                       onChange={(event) => onImageCountChange(event.target.value)}
                       className="h-8 w-[64px] border-0 bg-transparent px-0 text-center text-sm font-medium text-stone-700 shadow-none focus-visible:ring-0"
                     />
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <ModeButton active={mode === "generate"} onClick={() => onModeChange("generate")}>
-                      文生图
-                    </ModeButton>
-                    <ModeButton active={mode === "edit"} onClick={() => onModeChange("edit")}>
-                      编辑图
-                    </ModeButton>
+                    <span className="text-xs text-stone-400">/ {maxImageCount}</span>
                   </div>
                 </div>
 
                 <button
                   type="button"
                   onClick={() => void onSubmit()}
-                  disabled={!prompt.trim() || (mode === "edit" && referenceImages.length === 0)}
+                  disabled={!prompt.trim()}
                   className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-stone-950 text-white transition hover:bg-stone-800 disabled:cursor-not-allowed disabled:bg-stone-300"
                   aria-label={mode === "edit" ? "编辑图片" : "生成图片"}
                 >
@@ -231,28 +205,5 @@ export function ImageComposer({
         </div>
       </div>
     </div>
-  );
-}
-
-function ModeButton({
-  active,
-  children,
-  onClick,
-}: {
-  active: boolean;
-  children: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "rounded-full px-4 py-2 text-sm font-medium transition",
-        active ? "bg-stone-950 text-white" : "bg-stone-100 text-stone-600 hover:bg-stone-200",
-      )}
-    >
-      {children}
-    </button>
   );
 }

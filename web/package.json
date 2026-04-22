@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "next dev --webpack -H 0.0.0.0",
-    "build": "next build",
+    "build:admin": "NEXT_PUBLIC_APP_VARIANT=admin next build && node scripts/export-variant.mjs ../web_dist",
+    "build:studio": "NEXT_PUBLIC_APP_VARIANT=studio next build && node scripts/export-variant.mjs ../web_dist_studio",
+    "build": "npm run build:admin && npm run build:studio",
     "start": "next start"
   },
   "dependencies": {
