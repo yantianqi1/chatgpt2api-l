@@ -286,6 +286,10 @@ class ChatCompletionsApiTests(unittest.TestCase):
             result["choices"][0]["message"]["content"],
             "![image_1](https://img.example.com/generated-images/cat.png)",
         )
+        self.assertEqual(
+            result["choices"][0]["message"]["images"],
+            [{"url": "https://img.example.com/generated-images/cat.png", "revised_prompt": "draw a cat"}],
+        )
 
     def test_service_builds_response_image_output_with_urls_by_default(self) -> None:
         service = ChatGPTService(account_service=None)  # type: ignore[arg-type]

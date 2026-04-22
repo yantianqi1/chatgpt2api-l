@@ -39,8 +39,16 @@ def detect_ext(image_bytes: bytes) -> str:
     return ".png"
 
 
-def save_image(image_b64: str, name: str) -> Path:
-    image_bytes = base64.b64decode(image_b64)
+def save_image(image_reference: str, name: str) -> Path:
+    if image_reference.startswith("http://") or image_reference.startswith("https://"):
+        with urllib.request.urlopen(image_reference) as response:
+            image_bytes = response.read()
+    elif image_reference.startswith("data:"):
+        _, _, data = image_reference.partition(",")
+        image_bytes = base64.b64decode(data)
+    else:
+        image_bytes = base64.b64decode(image_reference)
+
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     path = OUTPUT_DIR / f"{name}_{int(time.time())}{detect_ext(image_bytes)}"
     path.write_bytes(image_bytes)

@@ -218,6 +218,21 @@ def extract_image_result_reference(item: dict[str, object]) -> str:
     return ""
 
 
+def normalize_chat_image_item(item: dict[str, object]) -> dict[str, object]:
+    normalized: dict[str, object] = {}
+    url = str(item.get("url") or "").strip()
+    b64_json = str(item.get("b64_json") or "").strip()
+    revised_prompt = str(item.get("revised_prompt") or "").strip()
+
+    if url:
+        normalized["url"] = url
+    if b64_json:
+        normalized["b64_json"] = b64_json
+    if revised_prompt:
+        normalized["revised_prompt"] = revised_prompt
+    return normalized
+
+
 def build_chat_image_completion(
     model: str,
     prompt: str,
@@ -227,10 +242,14 @@ def build_chat_image_completion(
     image_items = image_result.get("data") if isinstance(image_result.get("data"), list) else []
 
     markdown_images = []
+    normalized_images = []
 
     for index, item in enumerate(image_items, start=1):
         if not isinstance(item, dict):
             continue
+        normalized_item = normalize_chat_image_item(item)
+        if normalized_item:
+            normalized_images.append(normalized_item)
         image_reference = extract_image_result_reference(item)
         if not image_reference:
             continue
@@ -249,6 +268,7 @@ def build_chat_image_completion(
                 "message": {
                     "role": "assistant",
                     "content": text_content,
+                    "images": normalized_images,
                 },
                 "finish_reason": "stop",
             }
