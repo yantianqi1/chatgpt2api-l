@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import math
 import random
 import time
 import uuid
@@ -11,6 +12,13 @@ from typing import Optional, TYPE_CHECKING
 
 from services.account_service import account_service
 from services import proof_of_work
+from services.generated_image_store import save_generated_image
+from services.image_errors import (
+    IMAGE_REQUEST_TIMEOUT_MESSAGE,
+    ImageGenerationError,
+    ImageGenerationPendingError,
+    ImageGenerationTimeoutError,
+)
 
 if TYPE_CHECKING:
     from curl_cffi.requests import Session
@@ -24,6 +32,17 @@ USER_AGENT = (
 )
 DEFAULT_MODEL = "gpt-4o"
 MAX_POW_ATTEMPTS = 500000
+SHORT_REQUEST_TIMEOUT_SECONDS = 30
+MEDIUM_REQUEST_TIMEOUT_SECONDS = 60
+LONG_REQUEST_TIMEOUT_SECONDS = 180
+POLL_INTERVAL_SECONDS = 3
+RETRY_DELAY_SECONDS = 2.0
+PENDING_IMAGE_MESSAGE_MARKERS = (
+    "正在处理图片",
+    "图片准备好后我们会通知你",
+    "we'll notify you",
+    "we will notify you",
+)
 
 _CORES = [16, 24, 32]
 _SCREENS = [3000, 4000, 6000]
@@ -48,16 +67,12 @@ _WIN_KEYS = [
     "navigator",
 ]
 
-
-class ImageGenerationError(Exception):
-    pass
-
-
 @dataclass
 class GeneratedImage:
-    b64_json: str
     revised_prompt: str
-    url: str = ""
+    data: bytes
+    mime_type: str
+    url: str
 
 
 @dataclass
@@ -122,19 +137,66 @@ def _new_session(access_token: str) -> tuple[Session, dict]:
     return session, fp
 
 
-def _retry(fn, retries: int = 4, delay: float = 2.0, retry_on_status: tuple[int, ...] = ()) -> object:
+def _ensure_request_deadline(deadline: float | None) -> None:
+    if deadline is not None and time.monotonic() >= deadline:
+        raise ImageGenerationTimeoutError(IMAGE_REQUEST_TIMEOUT_MESSAGE)
+
+
+def _resolve_request_timeout(deadline: float | None, default: int) -> int:
+    _ensure_request_deadline(deadline)
+    if deadline is None:
+        return default
+    remaining = math.ceil(deadline - time.monotonic())
+    return max(1, min(default, remaining))
+
+
+def _sleep_with_deadline(seconds: float, deadline: float | None) -> None:
+    if seconds <= 0:
+        return
+    if deadline is None:
+        time.sleep(seconds)
+        return
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise ImageGenerationTimeoutError(IMAGE_REQUEST_TIMEOUT_MESSAGE)
+    time.sleep(min(seconds, remaining))
+
+
+def _is_pending_image_message(message: str) -> bool:
+    normalized = str(message or "").strip().lower()
+    return any(marker in normalized for marker in PENDING_IMAGE_MESSAGE_MARKERS)
+
+
+def _is_retryable_stream_error(exc: Exception) -> bool:
+    text = str(exc or "").lower()
+    return (
+        "http/2 stream" in text
+        or "stream was not closed cleanly" in text
+        or exc.__class__.__name__ == "RequestException"
+    )
+
+
+def _retry(
+    fn,
+    retries: int = 4,
+    delay: float = RETRY_DELAY_SECONDS,
+    retry_on_status: tuple[int, ...] = (),
+    deadline: float | None = None,
+) -> object:
     last_error = None
     last_response = None
     for attempt in range(retries):
         try:
             response = fn()
+        except ImageGenerationTimeoutError:
+            raise
         except Exception as exc:
             last_error = exc
-            time.sleep(delay)
+            _sleep_with_deadline(delay, deadline)
             continue
         if retry_on_status and getattr(response, "status_code", 0) in retry_on_status:
             last_response = response
-            time.sleep(delay * (attempt + 1))
+            _sleep_with_deadline(delay * (attempt + 1), deadline)
             continue
         return response
     if last_response is not None:
@@ -177,8 +239,14 @@ def _generate_proof_token(seed: str, difficulty: str, user_agent: str, proof_con
     return answer
 
 
-def _bootstrap(session: Session, fp: dict) -> str:
-    response = _retry(lambda: session.get(BASE_URL + "/", timeout=30))
+def _bootstrap(session: Session, fp: dict, deadline: float | None = None) -> str:
+    response = _retry(
+        lambda: session.get(
+            BASE_URL + "/",
+            timeout=_resolve_request_timeout(deadline, SHORT_REQUEST_TIMEOUT_SECONDS),
+        ),
+        deadline=deadline,
+    )
     try:
         proof_of_work.get_data_build_from_html(response.text)
     except Exception:
@@ -193,7 +261,12 @@ def _bootstrap(session: Session, fp: dict) -> str:
     return str(fp.get("oai-device-id") or uuid.uuid4())
 
 
-def _chat_requirements(session: Session, access_token: str, device_id: str) -> tuple[str, Optional[dict]]:
+def _chat_requirements(
+    session: Session,
+    access_token: str,
+    device_id: str,
+    deadline: float | None = None,
+) -> tuple[str, Optional[dict]]:
     config = _pow_config(USER_AGENT)
     response = _retry(
         lambda: session.post(
@@ -204,9 +277,10 @@ def _chat_requirements(session: Session, access_token: str, device_id: str) -> t
                 "content-type": "application/json",
             },
             json={"p": _get_requirements_token(config)},
-            timeout=30,
+            timeout=_resolve_request_timeout(deadline, SHORT_REQUEST_TIMEOUT_SECONDS),
         ),
         retries=4,
+        deadline=deadline,
     )
     if not response.ok:
         raise ImageGenerationError(response.text[:400] or f"chat-requirements failed: {response.status_code}")
@@ -224,7 +298,15 @@ def is_token_invalid_error(message: str) -> bool:
     )
 
 
-def _upload_image(session: Session, access_token: str, device_id: str, image_data: bytes, file_name: str, mime_type: str) -> str:
+def _upload_image(
+    session: Session,
+    access_token: str,
+    device_id: str,
+    image_data: bytes,
+    file_name: str,
+    mime_type: str,
+    deadline: float | None = None,
+) -> str:
     response = _retry(
         lambda: session.post(
             BASE_URL + "/backend-api/files",
@@ -240,9 +322,10 @@ def _upload_image(session: Session, access_token: str, device_id: str, image_dat
                 "timezone_offset_min": -480,
                 "reset_rate_limits": False,
             },
-            timeout=30,
+            timeout=_resolve_request_timeout(deadline, SHORT_REQUEST_TIMEOUT_SECONDS),
         ),
         retries=3,
+        deadline=deadline,
     )
     if not response.ok:
         raise ImageGenerationError(f"file upload init failed: {response.status_code} {response.text[:200]}")
@@ -261,9 +344,10 @@ def _upload_image(session: Session, access_token: str, device_id: str, image_dat
                 "x-ms-version": "2020-04-08",
             },
             data=image_data,
-            timeout=60,
+            timeout=_resolve_request_timeout(deadline, MEDIUM_REQUEST_TIMEOUT_SECONDS),
         ),
         retries=3,
+        deadline=deadline,
     )
     if not (200 <= put_resp.status_code < 300):
         raise ImageGenerationError(f"file upload PUT failed: {put_resp.status_code}")
@@ -282,9 +366,10 @@ def _upload_image(session: Session, access_token: str, device_id: str, image_dat
                 "index_for_retrieval": False,
                 "file_name": file_name,
             },
-            timeout=30,
+            timeout=_resolve_request_timeout(deadline, SHORT_REQUEST_TIMEOUT_SECONDS),
         ),
         retries=3,
+        deadline=deadline,
     )
     if not process_resp.ok:
         raise ImageGenerationError(f"file process failed: {process_resp.status_code}")
@@ -301,6 +386,7 @@ def _send_edit_conversation(
     prompt: str,
     model: str,
     images: list[EditInputImage],
+    deadline: float | None = None,
 ):
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -387,9 +473,10 @@ def _send_edit_conversation(
                 },
             },
             stream=True,
-            timeout=180,
+            timeout=_resolve_request_timeout(deadline, LONG_REQUEST_TIMEOUT_SECONDS),
         ),
         retries=3,
+        deadline=deadline,
     )
     if not response.ok:
         raise ImageGenerationError(response.text[:400] or f"conversation failed: {response.status_code}")
@@ -405,6 +492,7 @@ def _send_conversation(
     parent_message_id: str,
     prompt: str,
     model: str,
+    deadline: float | None = None,
 ):
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -467,9 +555,10 @@ def _send_conversation(
                 },
             },
             stream=True,
-            timeout=180,
+            timeout=_resolve_request_timeout(deadline, LONG_REQUEST_TIMEOUT_SECONDS),
         ),
         retries=3,
+        deadline=deadline,
     )
     if not response.ok:
         raise ImageGenerationError(response.text[:400] or f"conversation failed: {response.status_code}")
@@ -480,7 +569,23 @@ def _parse_sse(response) -> dict:
     file_ids: list[str] = []
     conversation_id = ""
     text_parts: list[str] = []
-    for raw_line in response.iter_lines():
+    iterator = iter(response.iter_lines())
+    while True:
+        try:
+            raw_line = next(iterator)
+        except StopIteration:
+            break
+        except Exception as exc:
+            if _is_retryable_stream_error(exc):
+                if conversation_id or file_ids:
+                    return {
+                        "conversation_id": conversation_id,
+                        "file_ids": file_ids,
+                        "text": "".join(text_parts),
+                        "stream_error": str(exc),
+                    }
+                raise ImageGenerationError(f"upstream stream interrupted: {exc}") from exc
+            raise
         if not raw_line:
             continue
         if isinstance(raw_line, bytes):
@@ -557,9 +662,16 @@ def _extract_image_ids(mapping: dict) -> list[str]:
     return file_ids
 
 
-def _poll_image_ids(session: Session, access_token: str, device_id: str, conversation_id: str) -> list[str]:
-    started = time.time()
-    while time.time() - started < 180:
+def _poll_image_ids(
+    session: Session,
+    access_token: str,
+    device_id: str,
+    conversation_id: str,
+    deadline: float | None = None,
+) -> list[str]:
+    started = time.monotonic()
+    while time.monotonic() - started < LONG_REQUEST_TIMEOUT_SECONDS:
+        _ensure_request_deadline(deadline)
         response = _retry(
             lambda: session.get(
                 f"{BASE_URL}/backend-api/conversation/{conversation_id}",
@@ -568,23 +680,24 @@ def _poll_image_ids(session: Session, access_token: str, device_id: str, convers
                     "oai-device-id": device_id,
                     "accept": "*/*",
                 },
-                timeout=30,
+                timeout=_resolve_request_timeout(deadline, SHORT_REQUEST_TIMEOUT_SECONDS),
             ),
             retries=2,
             retry_on_status=(429, 502, 503, 504),
+            deadline=deadline,
         )
         if response.status_code != 200:
-            time.sleep(3)
+            _sleep_with_deadline(POLL_INTERVAL_SECONDS, deadline)
             continue
         try:
             payload = response.json()
         except Exception:
-            time.sleep(3)
+            _sleep_with_deadline(POLL_INTERVAL_SECONDS, deadline)
             continue
         file_ids = _extract_image_ids(payload.get("mapping") or {})
         if file_ids:
             return file_ids
-        time.sleep(3)
+        _sleep_with_deadline(POLL_INTERVAL_SECONDS, deadline)
     return []
 
 
@@ -598,7 +711,14 @@ def _filter_output_file_ids(file_ids: list[str], input_file_ids: set[str]) -> li
     return [file_id for file_id in file_ids if _canonicalize_file_id(file_id) not in canonical_input_ids]
 
 
-def _fetch_download_url(session: Session, access_token: str, device_id: str, conversation_id: str, file_id: str) -> str:
+def _fetch_download_url(
+    session: Session,
+    access_token: str,
+    device_id: str,
+    conversation_id: str,
+    file_id: str,
+    deadline: float | None = None,
+) -> str:
     is_sediment = file_id.startswith("sed:")
     raw_id = file_id[4:] if is_sediment else file_id
     if is_sediment:
@@ -611,18 +731,34 @@ def _fetch_download_url(session: Session, access_token: str, device_id: str, con
             "Authorization": f"Bearer {access_token}",
             "oai-device-id": device_id,
         },
-        timeout=30,
+        timeout=_resolve_request_timeout(deadline, SHORT_REQUEST_TIMEOUT_SECONDS),
     )
     if not response.ok:
         return ""
     return str((response.json() or {}).get("download_url") or "")
 
 
-def _download_as_base64(session: Session, download_url: str) -> str:
-    response = session.get(download_url, timeout=60)
+def _download_image(session: Session, download_url: str, deadline: float | None = None) -> tuple[bytes, str]:
+    response = session.get(
+        download_url,
+        timeout=_resolve_request_timeout(deadline, MEDIUM_REQUEST_TIMEOUT_SECONDS),
+    )
     if not response.ok or not response.content:
         raise ImageGenerationError("download image failed")
-    return base64.b64encode(response.content).decode("ascii")
+    content_type = str(response.headers.get("content-type") or "image/png").split(";")[0].strip() or "image/png"
+    return response.content, content_type
+
+
+def _build_image_payload(image: GeneratedImage, response_format: str) -> dict[str, str]:
+    if response_format == "b64_json":
+        return {
+            "b64_json": base64.b64encode(image.data).decode("ascii"),
+            "revised_prompt": image.revised_prompt,
+        }
+    return {
+        "url": image.url,
+        "revised_prompt": image.revised_prompt,
+    }
 
 
 def _resolve_upstream_model(access_token: str, requested_model: str) -> str:
@@ -637,7 +773,13 @@ def _resolve_upstream_model(access_token: str, requested_model: str) -> str:
     return str(requested_model or DEFAULT_MODEL).strip() or DEFAULT_MODEL
 
 
-def generate_image_result(access_token: str, prompt: str, model: str = DEFAULT_MODEL) -> dict:
+def generate_image_result(
+    access_token: str,
+    prompt: str,
+    model: str = DEFAULT_MODEL,
+    response_format: str = "url",
+    deadline: float | None = None,
+) -> dict:
     prompt = str(prompt or "").strip()
     access_token = str(access_token or "").strip()
     if not prompt:
@@ -647,13 +789,14 @@ def generate_image_result(access_token: str, prompt: str, model: str = DEFAULT_M
 
     session, fp = _new_session(access_token)
     try:
+        _ensure_request_deadline(deadline)
         upstream_model = _resolve_upstream_model(access_token, model)
         print(
             f"[image-upstream] start token={access_token[:12]}... "
             f"requested_model={model} upstream_model={upstream_model}"
         )
-        device_id = _bootstrap(session, fp)
-        chat_token, pow_info = _chat_requirements(session, access_token, device_id)
+        device_id = _bootstrap(session, fp, deadline=deadline)
+        chat_token, pow_info = _chat_requirements(session, access_token, device_id, deadline=deadline)
         proof_token = None
         if pow_info.get("required"):
             proof_token = _generate_proof_token(
@@ -672,30 +815,45 @@ def generate_image_result(access_token: str, prompt: str, model: str = DEFAULT_M
             parent_message_id,
             prompt,
             upstream_model,
+            deadline=deadline,
         )
         parsed = _parse_sse(response)
         actual_conversation_id = parsed.get("conversation_id") or ""
         file_ids = parsed.get("file_ids") or []
         response_text = str(parsed.get("text") or "").strip()
         if actual_conversation_id and not file_ids:
-            file_ids = _poll_image_ids(session, access_token, device_id, actual_conversation_id)
+            file_ids = _poll_image_ids(session, access_token, device_id, actual_conversation_id, deadline=deadline)
         if not file_ids:
+            if response_text and _is_pending_image_message(response_text):
+                raise ImageGenerationPendingError(response_text)
+            stream_error = str(parsed.get("stream_error") or "").strip()
+            if stream_error:
+                raise ImageGenerationError(f"upstream stream interrupted: {stream_error}")
             if response_text:
                 raise ImageGenerationError(response_text)
             raise ImageGenerationError("no image returned from upstream")
         first_file_id = str(file_ids[0])
-        download_url = _fetch_download_url(session, access_token, device_id, actual_conversation_id, first_file_id)
+        download_url = _fetch_download_url(
+            session,
+            access_token,
+            device_id,
+            actual_conversation_id,
+            first_file_id,
+            deadline=deadline,
+        )
         if not download_url:
             raise ImageGenerationError("failed to get download url")
+        image_data, mime_type = _download_image(session, download_url, deadline=deadline)
         result = GeneratedImage(
-            b64_json=_download_as_base64(session, download_url),
             revised_prompt=prompt,
-            url=download_url,
+            data=image_data,
+            mime_type=mime_type,
+            url=save_generated_image(image_data, mime_type),
         )
         print(f"[image-upstream] success token={access_token[:12]}... images=1")
         return {
             "created": time.time_ns() // 1_000_000_000,
-            "data": [{"b64_json": result.b64_json, "revised_prompt": result.revised_prompt}],
+            "data": [_build_image_payload(result, response_format)],
         }
     except Exception as exc:
         print(f"[image-upstream] fail token={access_token[:12]}... error={exc}")
@@ -744,6 +902,8 @@ def edit_image_result(
     prompt: str,
     images: list[tuple[bytes, str, str]],
     model: str = DEFAULT_MODEL,
+    response_format: str = "url",
+    deadline: float | None = None,
 ) -> dict:
     prompt = str(prompt or "").strip()
     access_token = str(access_token or "").strip()
@@ -756,19 +916,28 @@ def edit_image_result(
 
     session, fp = _new_session(access_token)
     try:
+        _ensure_request_deadline(deadline)
         upstream_model = _resolve_upstream_model(access_token, model)
         print(
             f"[image-edit-upstream] start token={access_token[:12]}... "
             f"requested_model={model} upstream_model={upstream_model} images={len(images)}"
         )
-        device_id = _bootstrap(session, fp)
+        device_id = _bootstrap(session, fp, deadline=deadline)
 
         uploaded_images: list[EditInputImage] = []
         for image_data, file_name, mime_type in images:
             if not image_data:
                 raise ImageGenerationError("image is required")
 
-            file_id = _upload_image(session, access_token, device_id, image_data, file_name, mime_type)
+            file_id = _upload_image(
+                session,
+                access_token,
+                device_id,
+                image_data,
+                file_name,
+                mime_type,
+                deadline=deadline,
+            )
             print(f"[image-edit-upstream] uploaded file_id={file_id}")
             image_width, image_height = _get_image_dimensions(image_data)
             uploaded_images.append(
@@ -782,7 +951,7 @@ def edit_image_result(
                 )
             )
 
-        chat_token, pow_info = _chat_requirements(session, access_token, device_id)
+        chat_token, pow_info = _chat_requirements(session, access_token, device_id, deadline=deadline)
         proof_token = None
         if pow_info.get("required"):
             proof_token = _generate_proof_token(
@@ -802,6 +971,7 @@ def edit_image_result(
             prompt,
             upstream_model,
             uploaded_images,
+            deadline=deadline,
         )
         parsed = _parse_sse(response)
         actual_conversation_id = parsed.get("conversation_id") or ""
@@ -810,26 +980,40 @@ def edit_image_result(
         response_text = str(parsed.get("text") or "").strip()
         if actual_conversation_id and not file_ids:
             file_ids = _filter_output_file_ids(
-                _poll_image_ids(session, access_token, device_id, actual_conversation_id),
+                _poll_image_ids(session, access_token, device_id, actual_conversation_id, deadline=deadline),
                 input_file_ids,
             )
         if not file_ids:
+            if response_text and _is_pending_image_message(response_text):
+                raise ImageGenerationPendingError(response_text)
+            stream_error = str(parsed.get("stream_error") or "").strip()
+            if stream_error:
+                raise ImageGenerationError(f"upstream stream interrupted: {stream_error}")
             if response_text:
                 raise ImageGenerationError(response_text)
             raise ImageGenerationError("no image returned from upstream")
         first_file_id = str(file_ids[0])
-        download_url = _fetch_download_url(session, access_token, device_id, actual_conversation_id, first_file_id)
+        download_url = _fetch_download_url(
+            session,
+            access_token,
+            device_id,
+            actual_conversation_id,
+            first_file_id,
+            deadline=deadline,
+        )
         if not download_url:
             raise ImageGenerationError("failed to get download url")
+        image_data, mime_type = _download_image(session, download_url, deadline=deadline)
         result = GeneratedImage(
-            b64_json=_download_as_base64(session, download_url),
             revised_prompt=prompt,
-            url=download_url,
+            data=image_data,
+            mime_type=mime_type,
+            url=save_generated_image(image_data, mime_type),
         )
         print(f"[image-edit-upstream] success token={access_token[:12]}... inputs={len(uploaded_images)}")
         return {
             "created": time.time_ns() // 1_000_000_000,
-            "data": [{"b64_json": result.b64_json, "revised_prompt": result.revised_prompt}],
+            "data": [_build_image_payload(result, response_format)],
         }
     except Exception as exc:
         print(f"[image-edit-upstream] fail token={access_token[:12]}... error={exc}")

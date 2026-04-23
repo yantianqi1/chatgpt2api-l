@@ -79,14 +79,14 @@ class FakeImageBackend:
         self.error = error
         self.calls: list[tuple[str, tuple[object, ...]]] = []
 
-    def generate_with_pool(self, prompt: str, model: str, n: int) -> dict[str, object]:
-        self.calls.append(("generate", (prompt, model, n)))
+    def generate_with_pool(self, prompt: str, model: str, n: int, response_format: str = "url") -> dict[str, object]:
+        self.calls.append(("generate", (prompt, model, n, response_format)))
         if self.error is not None:
             raise self.error
         return self.result
 
-    def edit_with_pool(self, prompt: str, images, model: str, n: int) -> dict[str, object]:
-        self.calls.append(("edit", (prompt, images, model, n)))
+    def edit_with_pool(self, prompt: str, images, model: str, n: int, response_format: str = "url") -> dict[str, object]:
+        self.calls.append(("edit", (prompt, images, model, n, response_format)))
         if self.error is not None:
             raise self.error
         return self.result

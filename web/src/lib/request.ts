@@ -4,9 +4,9 @@ import webConfig from "@/constants/common-env";
 import {clearStoredAuthKey, getStoredAuthKey} from "@/store/auth";
 
 type RequestConfig = AxiosRequestConfig & {
-    redirectOnUnauthorized?: boolean;
-    skipAuth?: boolean;
-    withCredentials?: boolean;
+  redirectOnUnauthorized?: boolean;
+  skipAuth?: boolean;
+  withCredentials?: boolean;
 };
 
 const request = axios.create({
@@ -54,25 +54,32 @@ request.interceptors.response.use(
 );
 
 type RequestOptions = {
-    method?: string;
-    body?: unknown;
-    headers?: Record<string, string>;
-    redirectOnUnauthorized?: boolean;
-    skipAuth?: boolean;
-    withCredentials?: boolean;
+  method?: string;
+  body?: unknown;
+  headers?: Record<string, string>;
+  redirectOnUnauthorized?: boolean;
+  skipAuth?: boolean;
+  withCredentials?: boolean;
 };
 
 export async function httpRequest<T>(path: string, options: RequestOptions = {}) {
-    const {method = "GET", body, headers, redirectOnUnauthorized = true, skipAuth = false, withCredentials = false} = options;
-    const config: RequestConfig = {
-        url: path,
-        method,
-        data: body,
-        headers,
-        redirectOnUnauthorized,
-        skipAuth,
-        withCredentials,
-    };
-    const response = await request.request<T>(config);
-    return response.data;
+  const {
+    method = "GET",
+    body,
+    headers,
+    redirectOnUnauthorized = true,
+    skipAuth = false,
+    withCredentials = false,
+  } = options;
+  const config: RequestConfig = {
+    url: path,
+    method,
+    data: body,
+    headers,
+    redirectOnUnauthorized,
+    skipAuth,
+    withCredentials,
+  };
+  const response = await request.request<T>(config);
+  return response.data;
 }

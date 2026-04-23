@@ -22,15 +22,16 @@ type ImageComposerProps = {
   prompt: string;
   model: ImageModel;
   imageCount: string;
-  availableQuota: string;
+  maxImageCount?: number;
+  availableQuota?: string;
   statusHint?: string;
-  hasAnyGenerating: boolean;
-  generatingCount: number;
+  hasAnyGenerating?: boolean;
+  generatingCount?: number;
   referenceImages: Array<{ name: string; dataUrl: string }>;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   fileInputRef: RefObject<HTMLInputElement | null>;
   imageModelOptions: Array<{ label: string; value: ImageModel }>;
-  onModeChange: (value: ImageConversationMode) => void;
+  onModeChange?: (value: ImageConversationMode) => void;
   onPromptChange: (value: string) => void;
   onModelChange: (value: ImageModel) => void;
   onImageCountChange: (value: string) => void;
@@ -46,10 +47,11 @@ export function ImageComposer({
   prompt,
   model,
   imageCount,
+  maxImageCount = 10,
   availableQuota,
   statusHint,
-  hasAnyGenerating,
-  generatingCount,
+  hasAnyGenerating = false,
+  generatingCount = 0,
   referenceImages,
   textareaRef,
   fileInputRef,
@@ -70,9 +72,11 @@ export function ImageComposer({
     () => referenceImages.map((image, index) => ({ id: `${image.name}-${index}`, src: image.dataUrl })),
     [referenceImages],
   );
+  const canToggleMode = typeof onModeChange === "function";
+  const acceptsReferenceImages = canToggleMode ? mode === "edit" : true;
 
   const handleTextareaPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
-    if (mode !== "edit") {
+    if (canToggleMode && mode !== "edit") {
       return;
     }
 
@@ -88,7 +92,7 @@ export function ImageComposer({
   return (
     <div className="shrink-0 flex justify-center">
       <div style={{ width: "min(980px, 100%)" }}>
-        {mode === "edit" && (
+        {acceptsReferenceImages && (
           <input
             ref={fileInputRef}
             type="file"
@@ -101,7 +105,7 @@ export function ImageComposer({
           />
         )}
 
-        {mode === "edit" && referenceImages.length > 0 ? (
+        {acceptsReferenceImages && referenceImages.length > 0 ? (
           <div className="mb-3 flex flex-wrap gap-2 px-1">
             {referenceImages.map((image, index) => (
               <div key={`${image.name}-${index}`} className="relative size-16">
@@ -168,7 +172,7 @@ export function ImageComposer({
             <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-white via-white/95 to-transparent px-4 pb-4 pt-6 sm:px-6">
               <div className="flex items-end justify-between gap-3">
                 <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3">
-                  {mode === "edit" && (
+                  {acceptsReferenceImages && (
                     <Button
                       type="button"
                       variant="outline"
@@ -179,7 +183,11 @@ export function ImageComposer({
                       {referenceImages.length > 0 ? "继续添加参考图" : "上传参考图"}
                     </Button>
                   )}
-                  <div className="rounded-full bg-stone-100 px-3 py-2 text-xs font-medium text-stone-600">剩余额度 {availableQuota}</div>
+                  {availableQuota ? (
+                    <div className="rounded-full bg-stone-100 px-3 py-2 text-xs font-medium text-stone-600">
+                      剩余额度 {availableQuota}
+                    </div>
+                  ) : null}
                   {statusHint ? (
                     <div className="rounded-full bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">{statusHint}</div>
                   ) : null}
@@ -206,27 +214,29 @@ export function ImageComposer({
                     <Input
                       type="number"
                       min="1"
-                      max="10"
+                      max={String(maxImageCount)}
                       step="1"
                       value={imageCount}
                       onChange={(event) => onImageCountChange(event.target.value)}
                       className="h-8 w-[64px] border-0 bg-transparent px-0 text-center text-sm font-medium text-stone-700 shadow-none focus-visible:ring-0"
                     />
                   </div>
-                  <div className="flex items-center gap-2">
-                    <ModeButton active={mode === "generate"} onClick={() => onModeChange("generate")}>
-                      文生图
-                    </ModeButton>
-                    <ModeButton active={mode === "edit"} onClick={() => onModeChange("edit")}>
-                      编辑图
-                    </ModeButton>
-                  </div>
+                  {canToggleMode ? (
+                    <div className="flex items-center gap-2">
+                      <ModeButton active={mode === "generate"} onClick={() => onModeChange("generate")}>
+                        文生图
+                      </ModeButton>
+                      <ModeButton active={mode === "edit"} onClick={() => onModeChange("edit")}>
+                        编辑图
+                      </ModeButton>
+                    </div>
+                  ) : null}
                 </div>
 
                 <button
                   type="button"
                   onClick={() => void onSubmit()}
-                  disabled={submitBlocked || !prompt.trim() || (mode === "edit" && referenceImages.length === 0)}
+                  disabled={submitBlocked || !prompt.trim() || (acceptsReferenceImages && mode === "edit" && referenceImages.length === 0)}
                   className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-stone-950 text-white transition hover:bg-stone-800 disabled:cursor-not-allowed disabled:bg-stone-300"
                   aria-label={mode === "edit" ? "编辑图片" : "生成图片"}
                 >

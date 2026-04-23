@@ -3,6 +3,17 @@ import { httpRequest } from "@/lib/request";
 export type AccountType = "Free" | "Plus" | "Pro" | "Team";
 export type AccountStatus = "正常" | "限流" | "异常" | "禁用";
 export type ImageModel = "gpt-image-1" | "gpt-image-2";
+export type ImageRuntimeSettings = {
+  default_model: ImageModel;
+  max_count_per_request: number;
+  auto_retry_times: number;
+  request_timeout_seconds: number;
+};
+export type GeneratedImageData = {
+  url?: string;
+  b64_json?: string;
+  revised_prompt?: string;
+};
 export type AdminModelPricing = { model: string; price: string; enabled: "0" | "1" };
 export type AdminActivationCodeStatus = "unused" | "redeemed";
 export type AdminActivationCode = {
@@ -97,6 +108,17 @@ export async function fetchAccounts() {
   return httpRequest<AccountListResponse>("/api/accounts");
 }
 
+export async function fetchImageSettings() {
+  return httpRequest<ImageRuntimeSettings>("/api/image/settings");
+}
+
+export async function updateImageSettings(updates: Partial<ImageRuntimeSettings>) {
+  return httpRequest<ImageRuntimeSettings>("/api/image/settings", {
+    method: "POST",
+    body: updates,
+  });
+}
+
 export async function createAccounts(tokens: string[]) {
   return httpRequest<AccountMutationResponse>("/api/accounts", {
     method: "POST",
@@ -135,8 +157,8 @@ export async function updateAccount(
   });
 }
 
-export async function generateImage(prompt: string, model: ImageModel = "gpt-image-1") {
-  return httpRequest<{ created: number; data: Array<{ b64_json: string; revised_prompt?: string }> }>(
+export async function generateImage(prompt: string, model: ImageModel = "gpt-image-2") {
+  return httpRequest<{ created: number; data: GeneratedImageData[] }>(
     "/v1/images/generations",
     {
       method: "POST",
@@ -144,13 +166,13 @@ export async function generateImage(prompt: string, model: ImageModel = "gpt-ima
         prompt,
         model,
         n: 1,
-        response_format: "b64_json",
+        response_format: "url",
       },
     },
   );
 }
 
-export async function editImage(files: File | File[], prompt: string, model: ImageModel = "gpt-image-1") {
+export async function editImage(files: File | File[], prompt: string, model: ImageModel = "gpt-image-2") {
   const formData = new FormData();
   const uploadFiles = Array.isArray(files) ? files : [files];
 
@@ -160,14 +182,23 @@ export async function editImage(files: File | File[], prompt: string, model: Ima
   formData.append("prompt", prompt);
   formData.append("model", model);
   formData.append("n", "1");
+  formData.append("response_format", "url");
 
-  return httpRequest<{ created: number; data: Array<{ b64_json: string; revised_prompt?: string }> }>(
+  return httpRequest<{ created: number; data: GeneratedImageData[] }>(
     "/v1/images/edits",
     {
       method: "POST",
       body: formData,
     },
   );
+}
+
+export async function fetchPublicPanelStatus() {
+  return httpRequest<PublicPanelConfig>("/api/public-panel/status", {
+    redirectOnUnauthorized: false,
+    skipAuth: true,
+    withCredentials: true,
+  });
 }
 
 export async function fetchPublicPanelConfig() {
@@ -188,6 +219,48 @@ export async function addPublicPanelQuota(amount: number) {
     method: "POST",
     body: { amount },
   });
+}
+
+export async function generatePublicImage(prompt: string, model: ImageModel = "gpt-image-2") {
+  return httpRequest<{ created: number; data: GeneratedImageData[] }>(
+    "/api/public-panel/images/generations",
+    {
+      method: "POST",
+      body: {
+        prompt,
+        model,
+        n: 1,
+        response_format: "url",
+      },
+      redirectOnUnauthorized: false,
+      skipAuth: true,
+      withCredentials: true,
+    },
+  );
+}
+
+export async function editPublicImage(files: File | File[], prompt: string, model: ImageModel = "gpt-image-2") {
+  const formData = new FormData();
+  const uploadFiles = Array.isArray(files) ? files : [files];
+
+  uploadFiles.forEach((file) => {
+    formData.append("image", file);
+  });
+  formData.append("prompt", prompt);
+  formData.append("model", model);
+  formData.append("n", "1");
+  formData.append("response_format", "url");
+
+  return httpRequest<{ created: number; data: GeneratedImageData[] }>(
+    "/api/public-panel/images/edits",
+    {
+      method: "POST",
+      body: formData,
+      redirectOnUnauthorized: false,
+      skipAuth: true,
+      withCredentials: true,
+    },
+  );
 }
 
 export async function fetchAdminModelPricing() {

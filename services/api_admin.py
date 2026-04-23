@@ -7,17 +7,32 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from services.account_service import account_service
 from services.chatgpt_service import ChatGPTService
+from services.config import (
+    IMAGE_COUNT_LIMIT,
+    IMAGE_RETRY_LIMIT,
+    IMAGE_TIMEOUT_LIMIT,
+    get_image_settings,
+    update_image_settings,
+)
 from services.cpa_service import cpa_config, cpa_import_service, list_remote_files
-from services.image_service import ImageGenerationError
+from services.image_errors import ImageGenerationError, image_generation_status_code
 from services.streaming import iter_chat_completion_sse, iter_response_sse
+from services.utils import parse_image_count, parse_image_response_format
 
 
 class ImageGenerationRequest(BaseModel):
     prompt: str = Field(..., min_length=1)
-    model: str = "gpt-4o"
-    n: int = Field(default=1, ge=1, le=4)
-    response_format: str = "b64_json"
+    model: str = "gpt-image-2"
+    n: int = Field(default=1, ge=1)
+    response_format: str = "url"
     history_disabled: bool = True
+
+
+class ImageSettingsUpdateRequest(BaseModel):
+    default_model: str | None = None
+    max_count_per_request: int | None = Field(default=None, ge=1, le=IMAGE_COUNT_LIMIT)
+    auto_retry_times: int | None = Field(default=None, ge=0, le=IMAGE_RETRY_LIMIT)
+    request_timeout_seconds: int | None = Field(default=None, ge=0, le=IMAGE_TIMEOUT_LIMIT)
 
 
 class AccountCreateRequest(BaseModel):
@@ -93,6 +108,16 @@ def sanitize_cpa_pool(pool: dict | None) -> dict | None:
 
 def sanitize_cpa_pools(pools: list[dict]) -> list[dict]:
     return [sanitized for pool in pools if (sanitized := sanitize_cpa_pool(pool)) is not None]
+
+
+def serialize_image_settings() -> dict[str, object]:
+    settings = get_image_settings()
+    return {
+        "default_model": settings.default_model,
+        "max_count_per_request": settings.max_count_per_request,
+        "auto_retry_times": settings.auto_retry_times,
+        "request_timeout_seconds": settings.request_timeout_seconds,
+    }
 
 
 async def _read_uploaded_images(image: list[UploadFile]) -> list[tuple[bytes, str, str]]:
@@ -178,32 +203,65 @@ def register_account_routes(router: APIRouter, *, require_auth_key) -> None:
             raise HTTPException(status_code=404, detail={"error": "account not found"})
         return {"item": account, "items": account_service.list_accounts()}
 
+    @router.get("/api/image/settings")
+    async def get_image_runtime_settings(authorization: str | None = Header(default=None)):
+        require_auth_key(authorization)
+        return serialize_image_settings()
+
+    @router.post("/api/image/settings")
+    async def save_image_runtime_settings(
+        body: ImageSettingsUpdateRequest,
+        authorization: str | None = Header(default=None),
+    ):
+        require_auth_key(authorization)
+        updates = body.model_dump(exclude_none=True)
+        if not updates:
+            raise HTTPException(status_code=400, detail={"error": "no updates provided"})
+        update_image_settings(updates)
+        return serialize_image_settings()
+
 
 def register_openai_routes(router: APIRouter, *, chatgpt_service: ChatGPTService, require_auth_key) -> None:
     @router.post("/v1/images/generations")
     async def generate_images(body: ImageGenerationRequest, authorization: str | None = Header(default=None)):
         require_auth_key(authorization)
+        count = parse_image_count(body.n)
+        response_format = parse_image_response_format(body.response_format, default="url")
         try:
-            return await run_in_threadpool(chatgpt_service.generate_with_pool, body.prompt, body.model, body.n)
+            return await run_in_threadpool(
+                chatgpt_service.generate_with_pool,
+                body.prompt,
+                body.model,
+                count,
+                response_format,
+            )
         except ImageGenerationError as exc:
-            raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
+            raise HTTPException(status_code=image_generation_status_code(exc), detail={"error": str(exc)}) from exc
 
     @router.post("/v1/images/edits")
     async def edit_images(
         authorization: str | None = Header(default=None),
         image: list[UploadFile] = File(...),
         prompt: str = Form(...),
-        model: str = Form(default="gpt-image-1"),
+        model: str = Form(default="gpt-image-2"),
         n: int = Form(default=1),
+        response_format: str = Form(default="url"),
     ):
         require_auth_key(authorization)
-        if n < 1 or n > 4:
-            raise HTTPException(status_code=400, detail={"error": "n must be between 1 and 4"})
+        count = parse_image_count(n)
+        normalized_response_format = parse_image_response_format(response_format, default="url")
         images = await _read_uploaded_images(image)
         try:
-            return await run_in_threadpool(chatgpt_service.edit_with_pool, prompt, images, model, n)
+            return await run_in_threadpool(
+                chatgpt_service.edit_with_pool,
+                prompt,
+                images,
+                model,
+                count,
+                normalized_response_format,
+            )
         except ImageGenerationError as exc:
-            raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
+            raise HTTPException(status_code=image_generation_status_code(exc), detail={"error": str(exc)}) from exc
 
     @router.post("/v1/chat/completions")
     async def create_chat_completion(body: ChatCompletionRequest, authorization: str | None = Header(default=None)):

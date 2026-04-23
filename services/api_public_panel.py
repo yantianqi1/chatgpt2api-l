@@ -5,7 +5,8 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from services.api_public_auth import SESSION_COOKIE_NAME
-from services.image_service import ImageGenerationError
+from services.image_errors import ImageGenerationError, image_generation_status_code
+from services.utils import parse_image_count, parse_image_response_format
 
 FORBIDDEN_PUBLIC_ERRORS = {
     "public panel is disabled",
@@ -79,17 +80,20 @@ def register_public_panel_routes(
     ):
         parsed = image_request_model.model_validate(body)
         model = _normalize_public_model(parsed.model)
+        count = parse_image_count(parsed.n)
+        response_format = parse_image_response_format(parsed.response_format, default="url")
         public_user_id = _resolve_public_user_id(public_auth_service, session_token)
         try:
             return await run_in_threadpool(
                 image_workflow_service.generate_public,
                 parsed.prompt,
                 model,
-                parsed.n,
+                count,
+                response_format,
                 public_user_id,
             )
         except ImageGenerationError as exc:
-            raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
+            raise HTTPException(status_code=image_generation_status_code(exc), detail={"error": str(exc)}) from exc
         except RuntimeError as exc:
             raise _map_public_runtime_error(exc) from exc
 
@@ -99,11 +103,9 @@ def register_public_panel_routes(
         prompt: str = Form(...),
         model: str = Form(default="gpt-image-1"),
         n: int = Form(default=1),
+        response_format: str = Form(default="url"),
         session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
     ):
-        if n < 1 or n > 4:
-            raise HTTPException(status_code=400, detail={"error": "n must be between 1 and 4"})
-
         images: list[tuple[bytes, str, str]] = []
         for upload in image:
             image_data = await upload.read()
@@ -112,6 +114,8 @@ def register_public_panel_routes(
             images.append((image_data, upload.filename or "image.png", upload.content_type or "image/png"))
 
         normalized_model = _normalize_public_model(model)
+        count = parse_image_count(n)
+        normalized_response_format = parse_image_response_format(response_format, default="url")
         public_user_id = _resolve_public_user_id(public_auth_service, session_token)
         try:
             return await run_in_threadpool(
@@ -119,11 +123,12 @@ def register_public_panel_routes(
                 prompt,
                 images,
                 normalized_model,
-                n,
+                count,
+                normalized_response_format,
                 public_user_id,
             )
         except ImageGenerationError as exc:
-            raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
+            raise HTTPException(status_code=image_generation_status_code(exc), detail={"error": str(exc)}) from exc
         except RuntimeError as exc:
             raise _map_public_runtime_error(exc) from exc
 

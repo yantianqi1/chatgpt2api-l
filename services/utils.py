@@ -5,8 +5,11 @@ import uuid
 
 from fastapi import HTTPException
 
+from services.config import get_image_settings
+
 
 IMAGE_MODELS = {"gpt-image-1", "gpt-image-2"}
+IMAGE_RESPONSE_FORMATS = {"url", "b64_json"}
 CHAT_ROLES = {"system", "user", "assistant"}
 
 
@@ -188,9 +191,46 @@ def parse_image_count(raw_value: object) -> int:
         value = int(raw_value or 1)
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail={"error": "n must be an integer"}) from exc
-    if value < 1 or value > 4:
-        raise HTTPException(status_code=400, detail={"error": "n must be between 1 and 4"})
+    max_count = get_image_settings().max_count_per_request
+    if value < 1 or value > max_count:
+        raise HTTPException(status_code=400, detail={"error": f"n must be between 1 and {max_count}"})
     return value
+
+
+def parse_image_response_format(raw_value: object, *, default: str = "url") -> str:
+    normalized = str(raw_value or default).strip().lower() or default
+    if normalized not in IMAGE_RESPONSE_FORMATS:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"response_format must be one of: {', '.join(sorted(IMAGE_RESPONSE_FORMATS))}"},
+        )
+    return normalized
+
+
+def extract_image_result_reference(item: dict[str, object]) -> str:
+    url = str(item.get("url") or "").strip()
+    if url:
+        return url
+
+    b64_json = str(item.get("b64_json") or "").strip()
+    if b64_json:
+        return f"data:image/png;base64,{b64_json}"
+    return ""
+
+
+def normalize_chat_image_item(item: dict[str, object]) -> dict[str, object]:
+    normalized: dict[str, object] = {}
+    url = str(item.get("url") or "").strip()
+    b64_json = str(item.get("b64_json") or "").strip()
+    revised_prompt = str(item.get("revised_prompt") or "").strip()
+
+    if url:
+        normalized["url"] = url
+    if b64_json:
+        normalized["b64_json"] = b64_json
+    if revised_prompt:
+        normalized["revised_prompt"] = revised_prompt
+    return normalized
 
 
 def build_chat_image_completion(
@@ -202,15 +242,18 @@ def build_chat_image_completion(
     image_items = image_result.get("data") if isinstance(image_result.get("data"), list) else []
 
     markdown_images = []
+    normalized_images = []
 
     for index, item in enumerate(image_items, start=1):
         if not isinstance(item, dict):
             continue
-        b64_json = str(item.get("b64_json") or "").strip()
-        if not b64_json:
+        normalized_item = normalize_chat_image_item(item)
+        if normalized_item:
+            normalized_images.append(normalized_item)
+        image_reference = extract_image_result_reference(item)
+        if not image_reference:
             continue
-        image_data_url = f"data:image/png;base64,{b64_json}"
-        markdown_images.append(f"![image_{index}]({image_data_url})")
+        markdown_images.append(f"![image_{index}]({image_reference})")
 
     text_content = "\n\n".join(markdown_images) if markdown_images else "Image generation completed."
 
@@ -225,6 +268,7 @@ def build_chat_image_completion(
                 "message": {
                     "role": "assistant",
                     "content": text_content,
+                    "images": normalized_images,
                 },
                 "finish_reason": "stop",
             }

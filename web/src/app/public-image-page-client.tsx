@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { ImageComposer } from "@/app/image/components/image-composer";
 import { ImageResults } from "@/app/image/components/image-results";
 import { ImageSidebar } from "@/app/image/components/image-sidebar";
+import { getImageSrc } from "@/app/image/lib/image-studio";
 import { ImageLightbox } from "@/components/image-lightbox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -152,8 +153,9 @@ export default function PublicImagePageClient() {
   const lightboxImages = useMemo(
     () =>
       (selectedConversation?.images ?? [])
-        .filter((img): img is StoredImage & { b64_json: string } => img.status === "success" && !!img.b64_json)
-        .map((img) => ({ id: img.id, src: `data:image/png;base64,${img.b64_json}` })),
+        .filter((img) => img.status === "success")
+        .map((img) => ({ id: img.id, src: getImageSrc(img) }))
+        .filter((img) => !!img.src),
     [selectedConversation],
   );
   const composerQuotaLabel = publicUser ? publicUser.balance : panelStatus ? String(panelStatus.available_quota) : statusError ? "—" : "加载中";
@@ -309,10 +311,15 @@ export default function PublicImagePageClient() {
           ? await editPublicImage(referenceImageFiles, prompt, imageModel)
           : await generatePublicImage(prompt, imageModel);
         const first = data.data?.[0];
-        if (!first?.b64_json) {
+        if (!first || !getImageSrc(first)) {
           throw new Error(`第 ${index + 1} 张没有返回图片数据`);
         }
-        const nextImage: StoredImage = { id: `${conversationId}-${index}`, status: "success", b64_json: first.b64_json };
+        const nextImage: StoredImage = {
+          id: `${conversationId}-${index}`,
+          status: "success",
+          url: first.url,
+          b64_json: first.b64_json,
+        };
         await updateConversation(conversationId, (current) => ({
           ...(current ?? draftConversation),
           images: (current?.images ?? draftConversation.images).map((image) => (image.id === nextImage.id ? nextImage : image)),

@@ -8,6 +8,7 @@ from threading import Event, Thread
 from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from services.account_service import account_service
 from services.api_admin import ImageGenerationRequest, register_admin_routes
@@ -139,6 +140,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.mount("/generated-images", StaticFiles(directory=config.generated_images_dir), name="generated-images")
     router = APIRouter()
     register_admin_routes(router, app_version=app_version, chatgpt_service=chatgpt_service, require_auth_key=require_auth_key)
     register_admin_billing_routes(router, billing_store=billing_store, require_auth_key=require_auth_key)

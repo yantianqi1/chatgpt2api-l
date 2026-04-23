@@ -17,7 +17,13 @@ class ImageQuotaGateway(Protocol):
 
 
 class ImageBackend(Protocol):
-    def generate_with_pool(self, prompt: str, model: str, n: int) -> dict[str, object]: ...
+    def generate_with_pool(
+        self,
+        prompt: str,
+        model: str,
+        n: int,
+        response_format: str = "url",
+    ) -> dict[str, object]: ...
 
     def edit_with_pool(
         self,
@@ -25,6 +31,7 @@ class ImageBackend(Protocol):
         images: Iterable[tuple[bytes, str, str]],
         model: str,
         n: int,
+        response_format: str = "url",
     ) -> dict[str, object]: ...
 
 
@@ -52,8 +59,14 @@ class ImageWorkflowService:
         self.billing_store = billing_store
         self.image_backend = image_backend
 
-    def generate_admin(self, prompt: str, model: str, n: int) -> dict[str, object]:
-        return self.image_backend.generate_with_pool(prompt, model, n)
+    def generate_admin(
+        self,
+        prompt: str,
+        model: str,
+        n: int,
+        response_format: str = "url",
+    ) -> dict[str, object]:
+        return self.image_backend.generate_with_pool(prompt, model, n, response_format)
 
     def edit_admin(
         self,
@@ -61,18 +74,20 @@ class ImageWorkflowService:
         images: Iterable[tuple[bytes, str, str]],
         model: str,
         n: int,
+        response_format: str = "url",
     ) -> dict[str, object]:
-        return self.image_backend.edit_with_pool(prompt, images, model, n)
+        return self.image_backend.edit_with_pool(prompt, images, model, n, response_format)
 
     def generate_public(
         self,
         prompt: str,
         model: str,
         n: int,
+        response_format: str = "url",
         public_user_id: str | None = None,
     ) -> dict[str, object]:
         return self._run_public(
-            lambda: self.image_backend.generate_with_pool(prompt, model, n),
+            lambda: self.image_backend.generate_with_pool(prompt, model, n, response_format),
             model=model,
             count=n,
             public_user_id=public_user_id,
@@ -84,10 +99,11 @@ class ImageWorkflowService:
         images: Iterable[tuple[bytes, str, str]],
         model: str,
         n: int,
+        response_format: str = "url",
         public_user_id: str | None = None,
     ) -> dict[str, object]:
         return self._run_public(
-            lambda: self.image_backend.edit_with_pool(prompt, images, model, n),
+            lambda: self.image_backend.edit_with_pool(prompt, images, model, n, response_format),
             model=model,
             count=n,
             public_user_id=public_user_id,

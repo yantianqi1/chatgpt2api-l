@@ -6,9 +6,13 @@ dist/
 wheels/
 *.egg-info
 web_dist
+web_dist_studio
 .worktrees/
 # Virtual environments
 .venv
+.env
+.env.*
+!.env.example
 .idea
 data
 config.json

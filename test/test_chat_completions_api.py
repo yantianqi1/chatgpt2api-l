@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import ANY, MagicMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -11,10 +13,12 @@ from services.api import create_app
 from services.chatgpt_service import ChatGPTService
 from services.config import config
 from services.image_service import ImageGenerationError
+from services.image_errors import ImageGenerationPendingError
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 ROOT_CONFIG_FILE = ROOT_DIR / "config.json"
+GENERATED_IMAGE_DIR = ROOT_DIR / "data" / "generated-images"
 
 
 class ChatCompletionsApiTests(unittest.TestCase):
@@ -35,6 +39,17 @@ class ChatCompletionsApiTests(unittest.TestCase):
     def tearDownClass(cls) -> None:
         if cls._created_root_config and ROOT_CONFIG_FILE.exists():
             ROOT_CONFIG_FILE.unlink()
+
+    @contextmanager
+    def generated_image_file(self, file_name: str, content: bytes):
+        GENERATED_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+        image_path = GENERATED_IMAGE_DIR / file_name
+        image_path.write_bytes(content)
+        try:
+            yield image_path
+        finally:
+            if image_path.exists():
+                image_path.unlink()
 
     def test_chat_completions_accepts_text_requests(self) -> None:
         mocked_response = {
@@ -248,17 +263,133 @@ class ChatCompletionsApiTests(unittest.TestCase):
         self.assertEqual(result, mocked_response)
         self.assertEqual(mocked_create.call_count, 1)
 
-    def test_generate_with_pool_surfaces_no_available_token_error(self) -> None:
-        class FakeAccountService:
-            def get_available_access_token(self) -> str:
-                raise RuntimeError("No available tokens found in data/accounts.json")
+    def test_service_builds_image_chat_completion_with_markdown_urls_by_default(self) -> None:
+        service = ChatGPTService(account_service=None)  # type: ignore[arg-type]
+        with patch.object(
+            service,
+            "generate_with_pool",
+            return_value={
+                "created": 0,
+                "data": [{"url": "https://img.example.com/generated-images/cat.png", "revised_prompt": "draw a cat"}],
+            },
+        ):
+            result = service.create_chat_completion(
+                {
+                    "model": "gpt-image-2",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "draw a cat",
+                        }
+                    ],
+                }
+            )
 
-        service = ChatGPTService(account_service=FakeAccountService())  # type: ignore[arg-type]
+        self.assertEqual(
+            result["choices"][0]["message"]["content"],
+            "![image_1](https://img.example.com/generated-images/cat.png)",
+        )
+        self.assertEqual(
+            result["choices"][0]["message"]["images"],
+            [{"url": "https://img.example.com/generated-images/cat.png", "revised_prompt": "draw a cat"}],
+        )
 
-        with self.assertRaises(ImageGenerationError) as context:
-            service.generate_with_pool("draw a cat", "gpt-image-1", 1)
+    def test_service_builds_response_image_output_with_urls_by_default(self) -> None:
+        service = ChatGPTService(account_service=None)  # type: ignore[arg-type]
+        with patch.object(
+            service,
+            "generate_with_pool",
+            return_value={
+                "created": 0,
+                "data": [{"url": "https://img.example.com/generated-images/cat.png", "revised_prompt": "draw a cat"}],
+            },
+        ):
+            result = service.create_response(
+                {
+                    "model": "gpt-5",
+                    "tools": [{"type": "image_generation"}],
+                    "input": "draw a cat",
+                }
+            )
 
-        self.assertIn("No available tokens found", str(context.exception))
+        self.assertEqual(result["output"][0]["result"], "https://img.example.com/generated-images/cat.png")
+
+    def test_service_retries_image_generation_without_concurrency_setting(self) -> None:
+        account_service = MagicMock()
+        account_service.get_available_access_token.side_effect = ["token-a", "token-b"]
+        account_service.mark_image_result.return_value = {"quota": 1, "status": "正常"}
+        service = ChatGPTService(account_service)
+        responses = [
+            ImageGenerationError("temporary error"),
+            {"created": 1, "data": [{"url": "https://img.example.com/generated-images/abc.png"}]},
+        ]
+
+        def fake_generate(*_: object) -> dict[str, object]:
+            result = responses.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        with (
+            patch(
+                "services.chatgpt_service.get_image_settings",
+                return_value=SimpleNamespace(auto_retry_times=1),
+            ),
+            patch("services.chatgpt_service.generate_image_result", side_effect=fake_generate) as mocked_generate,
+        ):
+            result = service.generate_with_pool("draw a cat", "gpt-image-2", 1, "url")
+
+        self.assertEqual(mocked_generate.call_count, 2)
+        self.assertEqual(len(result["data"]), 1)
+        self.assertEqual(account_service.mark_image_result.call_count, 2)
+
+    def test_service_does_not_retry_pending_image_generation_errors(self) -> None:
+        account_service = MagicMock()
+        account_service.get_available_access_token.side_effect = ["token-a", "token-b"]
+        account_service.mark_image_result.return_value = {"quota": 1, "status": "正常"}
+        service = ChatGPTService(account_service)
+
+        with (
+            patch(
+                "services.chatgpt_service.get_image_settings",
+                return_value=SimpleNamespace(auto_retry_times=1, request_timeout_seconds=90),
+            ),
+            patch(
+                "services.chatgpt_service.generate_image_result",
+                side_effect=ImageGenerationPendingError("正在处理图片"),
+            ) as mocked_generate,
+        ):
+            with self.assertRaises(ImageGenerationPendingError):
+                service.generate_with_pool("draw a cat", "gpt-image-2", 1, "url")
+
+        self.assertEqual(mocked_generate.call_count, 1)
+
+    def test_images_generation_defaults_to_url_response_format(self) -> None:
+        with patch.object(
+            ChatGPTService,
+            "generate_with_pool",
+            autospec=True,
+            return_value={"created": 1, "data": [{"url": "https://img.example.com/generated-images/cat.png"}]},
+        ) as mocked_generate:
+            response = self.client.post(
+                "/v1/images/generations",
+                headers=self.headers,
+                json={
+                    "prompt": "draw a cat",
+                    "model": "gpt-image-2",
+                    "n": 1,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        mocked_generate.assert_called_once_with(ANY, "draw a cat", "gpt-image-2", 1, "url")
+
+    def test_generated_images_are_served_as_static_files(self) -> None:
+        with self.generated_image_file("test-image.png", b"png-bytes"):
+            response = self.client.get("/generated-images/test-image.png")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b"png-bytes")
 
 
 if __name__ == "__main__":

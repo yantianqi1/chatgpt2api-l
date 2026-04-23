@@ -58,6 +58,86 @@ class ConfigLoadingTests(unittest.TestCase):
                 else:
                     module.os.environ["CHATGPT2API_AUTH_KEY"] = old_env_auth_key
 
+    def test_image_settings_use_defaults_and_persist_updates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base_dir = Path(tmp_dir)
+            data_dir = base_dir / "data"
+            config_file = base_dir / "config.json"
+            config_file.write_text(json.dumps({"auth-key": "file-auth"}), encoding="utf-8")
+
+            module = self.config_module
+            old_base_dir = module.BASE_DIR
+            old_data_dir = module.DATA_DIR
+            old_config_file = module.CONFIG_FILE
+            try:
+                module.BASE_DIR = base_dir
+                module.DATA_DIR = data_dir
+                module.CONFIG_FILE = config_file
+
+                settings = module.get_image_settings()
+                self.assertEqual(settings.default_model, "gpt-image-2")
+                self.assertEqual(settings.max_count_per_request, 4)
+                self.assertEqual(settings.auto_retry_times, 1)
+                self.assertEqual(settings.request_timeout_seconds, 90)
+
+                updated = module.update_image_settings(
+                    {
+                        "default_model": "gpt-image-1",
+                        "max_count_per_request": 6,
+                        "auto_retry_times": 3,
+                        "request_timeout_seconds": 45,
+                    }
+                )
+                self.assertEqual(updated.default_model, "gpt-image-1")
+                self.assertEqual(updated.max_count_per_request, 6)
+                self.assertEqual(updated.auto_retry_times, 3)
+                self.assertEqual(updated.request_timeout_seconds, 45)
+
+                persisted = json.loads(config_file.read_text(encoding="utf-8"))
+                self.assertEqual(persisted["image_default_model"], "gpt-image-1")
+                self.assertEqual(persisted["image_max_count_per_request"], 6)
+                self.assertEqual(persisted["image_auto_retry_times"], 3)
+                self.assertEqual(persisted["image_request_timeout_seconds"], 45)
+            finally:
+                module.BASE_DIR = old_base_dir
+                module.DATA_DIR = old_data_dir
+                module.CONFIG_FILE = old_config_file
+
+    def test_load_settings_reads_public_base_url_from_dotenv(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base_dir = Path(tmp_dir)
+            data_dir = base_dir / "data"
+            config_file = base_dir / "config.json"
+            env_file = base_dir / ".env"
+            env_file.write_text(
+                "CHATGPT2API_AUTH_KEY=dotenv-auth\nCHATGPT2API_PUBLIC_BASE_URL=https://img.example.com\n",
+                encoding="utf-8",
+            )
+
+            module = self.config_module
+            old_base_dir = module.BASE_DIR
+            old_data_dir = module.DATA_DIR
+            old_config_file = module.CONFIG_FILE
+            old_env_auth_key = module.os.environ.pop("CHATGPT2API_AUTH_KEY", None)
+            old_env_public_base_url = module.os.environ.pop("CHATGPT2API_PUBLIC_BASE_URL", None)
+            try:
+                module.BASE_DIR = base_dir
+                module.DATA_DIR = data_dir
+                module.CONFIG_FILE = config_file
+
+                settings = module._load_settings()
+
+                self.assertEqual(settings.auth_key, "dotenv-auth")
+                self.assertEqual(settings.public_base_url, "https://img.example.com")
+            finally:
+                module.BASE_DIR = old_base_dir
+                module.DATA_DIR = old_data_dir
+                module.CONFIG_FILE = old_config_file
+                if old_env_auth_key is not None:
+                    module.os.environ["CHATGPT2API_AUTH_KEY"] = old_env_auth_key
+                if old_env_public_base_url is not None:
+                    module.os.environ["CHATGPT2API_PUBLIC_BASE_URL"] = old_env_public_base_url
+
 
 if __name__ == "__main__":
     unittest.main()

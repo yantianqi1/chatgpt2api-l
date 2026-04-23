@@ -1,9 +1,9 @@
 import { httpRequest } from "@/lib/request";
-import type { ImageModel, PublicPanelConfig } from "@/lib/api";
+import type { GeneratedImageData, ImageModel, PublicPanelConfig } from "@/lib/api";
 
 type GenerationResponse = {
   created: number;
-  data: Array<{ b64_json: string; revised_prompt?: string }>;
+  data: GeneratedImageData[];
 };
 
 export async function fetchPublicPanelStatus() {
@@ -14,14 +14,14 @@ export async function fetchPublicPanelStatus() {
   });
 }
 
-export async function generatePublicImage(prompt: string, model: ImageModel = "gpt-image-1") {
+export async function generatePublicImage(prompt: string, model: ImageModel = "gpt-image-2") {
   return httpRequest<GenerationResponse>("/api/public-panel/images/generations", {
     method: "POST",
     body: {
       prompt,
       model,
       n: 1,
-      response_format: "b64_json",
+      response_format: "url",
     },
     redirectOnUnauthorized: false,
     skipAuth: true,
@@ -29,7 +29,7 @@ export async function generatePublicImage(prompt: string, model: ImageModel = "g
   });
 }
 
-export async function editPublicImage(files: File | File[], prompt: string, model: ImageModel = "gpt-image-1") {
+export async function editPublicImage(files: File | File[], prompt: string, model: ImageModel = "gpt-image-2") {
   const formData = new FormData();
   const uploadFiles = Array.isArray(files) ? files : [files];
 
@@ -39,6 +39,7 @@ export async function editPublicImage(files: File | File[], prompt: string, mode
   formData.append("prompt", prompt);
   formData.append("model", model);
   formData.append("n", "1");
+  formData.append("response_format", "url");
 
   return httpRequest<GenerationResponse>("/api/public-panel/images/edits", {
     method: "POST",

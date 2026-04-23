@@ -194,12 +194,12 @@ def test_public_generation_commits_quota_on_success(tmp_path: Path) -> None:
             )
 
     assert response.status_code == 200
-    mocked_generate.assert_called_once_with(ANY, "cat", "gpt-image-1", 2)
+    mocked_generate.assert_called_once_with(ANY, "cat", "gpt-image-1", 2, "url")
     saved = json.loads(panel_file.read_text(encoding="utf-8"))
     assert saved["fixed_quota"] == 300
 
 
-def test_public_generation_defaults_to_gpt_image_1_when_model_is_omitted(tmp_path: Path) -> None:
+def test_public_generation_defaults_to_gpt_image_2_when_model_is_omitted(tmp_path: Path) -> None:
     panel_file = tmp_path / "public_panel.json"
     billing_file = tmp_path / "public_billing.db"
     write_public_panel_file(panel_file, enabled=True, mode="fixed", fixed_quota=500)
@@ -218,7 +218,7 @@ def test_public_generation_defaults_to_gpt_image_1_when_model_is_omitted(tmp_pat
             )
 
     assert response.status_code == 200
-    mocked_generate.assert_called_once_with(ANY, "cat", "gpt-image-1", 1)
+    mocked_generate.assert_called_once_with(ANY, "cat", "gpt-image-2", 1, "url")
 
 
 def test_public_generation_rolls_back_quota_on_failure(tmp_path: Path) -> None:
@@ -260,7 +260,7 @@ def test_authenticated_public_generation_uses_user_balance_not_public_panel(tmp_
             )
 
     assert response.status_code == 200
-    mocked_generate.assert_called_once_with(ANY, "cat", "gpt-image-1", 2)
+    mocked_generate.assert_called_once_with(ANY, "cat", "gpt-image-1", 2, "url")
     saved = json.loads(panel_file.read_text(encoding="utf-8"))
     assert saved["fixed_quota"] == 500
     store = PublicBillingStore(billing_file)
