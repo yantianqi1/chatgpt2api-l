@@ -31,7 +31,10 @@ class PublicBillingStore:
         password_hash: str,
         signup_bonus_cents: int,
     ) -> dict[str, str]:
-        bonus_cents = self._require_cents(signup_bonus_cents, name="signup_bonus_cents")
+        bonus_cents = self._require_nonnegative_cents(
+            signup_bonus_cents,
+            name="signup_bonus_cents",
+        )
         now = self._now()
         with self._lock, self._connect() as conn:
             cursor = conn.execute(
@@ -71,7 +74,7 @@ class PublicBillingStore:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     username TEXT NOT NULL UNIQUE,
                     password_hash TEXT NOT NULL,
-                    balance_cents INTEGER NOT NULL,
+                    balance_cents INTEGER NOT NULL CHECK (balance_cents >= 0),
                     status TEXT NOT NULL CHECK (status IN ('active', 'disabled')),
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
@@ -90,7 +93,7 @@ class PublicBillingStore:
                 CREATE TABLE IF NOT EXISTS activation_codes (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     code TEXT NOT NULL UNIQUE,
-                    amount_cents INTEGER NOT NULL,
+                    amount_cents INTEGER NOT NULL CHECK (amount_cents >= 0),
                     batch_note TEXT NOT NULL,
                     status TEXT NOT NULL CHECK (status IN ('unused', 'redeemed')),
                     created_at TEXT NOT NULL,
@@ -104,7 +107,7 @@ class PublicBillingStore:
                     scope TEXT NOT NULL,
                     user_id INTEGER,
                     change_cents INTEGER NOT NULL,
-                    balance_after_cents INTEGER NOT NULL,
+                    balance_after_cents INTEGER NOT NULL CHECK (balance_after_cents >= 0),
                     reason TEXT NOT NULL,
                     reference_type TEXT NOT NULL,
                     reference_id TEXT NOT NULL,
@@ -114,7 +117,7 @@ class PublicBillingStore:
 
                 CREATE TABLE IF NOT EXISTS model_pricing (
                     model TEXT PRIMARY KEY,
-                    price_cents INTEGER NOT NULL,
+                    price_cents INTEGER NOT NULL CHECK (price_cents >= 0),
                     enabled INTEGER NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -146,9 +149,11 @@ class PublicBillingStore:
         return f"{sign}{cents // 100}.{cents % 100:02d}"
 
     @staticmethod
-    def _require_cents(value: object, *, name: str) -> int:
+    def _require_nonnegative_cents(value: object, *, name: str) -> int:
         if isinstance(value, bool) or not isinstance(value, int):
             raise TypeError(f"{name} must be an int")
+        if value < 0:
+            raise ValueError(f"{name} must be greater than or equal to 0")
         return value
 
     def _format_model_pricing(self, row: sqlite3.Row) -> dict[str, str]:

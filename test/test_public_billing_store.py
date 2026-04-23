@@ -34,6 +34,13 @@ def test_store_rejects_non_integer_signup_bonus_cents(tmp_path: Path) -> None:
         store.create_user(username="demo", password_hash="hash", signup_bonus_cents="100")
 
 
+def test_store_rejects_negative_signup_bonus_cents(tmp_path: Path) -> None:
+    store = PublicBillingStore(tmp_path / "public_billing.db")
+
+    with pytest.raises(ValueError, match="signup_bonus_cents must be greater than or equal to 0"):
+        store.create_user(username="demo", password_hash="hash", signup_bonus_cents=-100)
+
+
 def test_store_reopen_keeps_seed_rows_and_persists_ledger(tmp_path: Path) -> None:
     db_file = tmp_path / "public_billing.db"
 
@@ -56,3 +63,41 @@ def test_store_reopen_keeps_seed_rows_and_persists_ledger(tmp_path: Path) -> Non
     assert [item["model"] for item in prices] == ["gpt-image-1", "gpt-image-2"]
     assert price_count == 2
     assert ledger_row == ("user", 1, 100, 100, "signup_bonus", "user", "1")
+
+
+def test_store_rejects_negative_money_columns_at_db_level(tmp_path: Path) -> None:
+    db_file = tmp_path / "public_billing.db"
+    store = PublicBillingStore(db_file)
+
+    with sqlite3.connect(db_file) as conn:
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                INSERT INTO users (username, password_hash, balance_cents, status, created_at, updated_at)
+                VALUES ('bad-user', 'hash', -1, 'active', 'now', 'now')
+                """
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                INSERT INTO activation_codes (code, amount_cents, batch_note, status, created_at)
+                VALUES ('code-1', -1, 'note', 'unused', 'now')
+                """
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                INSERT INTO quota_ledger (
+                    scope, user_id, change_cents, balance_after_cents, reason,
+                    reference_type, reference_id, created_at
+                )
+                VALUES ('user', NULL, -1, -1, 'signup_bonus', 'user', '1', 'now')
+                """
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                INSERT INTO model_pricing (model, price_cents, enabled, updated_at)
+                VALUES ('gpt-image-x', -1, 1, 'now')
+                """
+            )
