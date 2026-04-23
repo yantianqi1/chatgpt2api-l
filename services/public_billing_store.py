@@ -31,7 +31,7 @@ class PublicBillingStore:
         password_hash: str,
         signup_bonus_cents: int,
     ) -> dict[str, str]:
-        bonus_cents = int(signup_bonus_cents)
+        bonus_cents = self._require_cents(signup_bonus_cents, name="signup_bonus_cents")
         now = self._now()
         with self._lock, self._connect() as conn:
             cursor = conn.execute(
@@ -72,7 +72,7 @@ class PublicBillingStore:
                     username TEXT NOT NULL UNIQUE,
                     password_hash TEXT NOT NULL,
                     balance_cents INTEGER NOT NULL,
-                    status TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('active', 'disabled')),
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -92,7 +92,7 @@ class PublicBillingStore:
                     code TEXT NOT NULL UNIQUE,
                     amount_cents INTEGER NOT NULL,
                     batch_note TEXT NOT NULL,
-                    status TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK (status IN ('unused', 'redeemed')),
                     created_at TEXT NOT NULL,
                     redeemed_by_user_id INTEGER,
                     redeemed_at TEXT,
@@ -145,6 +145,12 @@ class PublicBillingStore:
         sign = "-" if value_cents < 0 else ""
         return f"{sign}{cents // 100}.{cents % 100:02d}"
 
+    @staticmethod
+    def _require_cents(value: object, *, name: str) -> int:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise TypeError(f"{name} must be an int")
+        return value
+
     def _format_model_pricing(self, row: sqlite3.Row) -> dict[str, str]:
         return {
             "model": str(row["model"]),
@@ -156,7 +162,6 @@ class PublicBillingStore:
         return {
             "id": str(row["id"]),
             "username": str(row["username"]),
-            "password_hash": str(row["password_hash"]),
             "balance": self._format_money(int(row["balance_cents"])),
             "status": str(row["status"]),
             "created_at": str(row["created_at"]),
