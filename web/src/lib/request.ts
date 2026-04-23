@@ -6,6 +6,7 @@ import {clearStoredAuthKey, getStoredAuthKey} from "@/store/auth";
 type RequestConfig = AxiosRequestConfig & {
     redirectOnUnauthorized?: boolean;
     skipAuth?: boolean;
+    withCredentials?: boolean;
 };
 
 const request = axios.create({
@@ -58,10 +59,11 @@ type RequestOptions = {
     headers?: Record<string, string>;
     redirectOnUnauthorized?: boolean;
     skipAuth?: boolean;
+    withCredentials?: boolean;
 };
 
 export async function httpRequest<T>(path: string, options: RequestOptions = {}) {
-    const {method = "GET", body, headers, redirectOnUnauthorized = true, skipAuth = false} = options;
+    const {method = "GET", body, headers, redirectOnUnauthorized = true, skipAuth = false, withCredentials = false} = options;
     const config: RequestConfig = {
         url: path,
         method,
@@ -69,6 +71,7 @@ export async function httpRequest<T>(path: string, options: RequestOptions = {})
         headers,
         redirectOnUnauthorized,
         skipAuth,
+        withCredentials,
     };
     const response = await request.request<T>(config);
     return response.data;

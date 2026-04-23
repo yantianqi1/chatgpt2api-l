@@ -1,14 +1,24 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Sparkles } from "lucide-react";
+import { LoaderCircle, LogOut, Sparkles, Ticket, UserRound } from "lucide-react";
 import { toast } from "sonner";
 
 import { ImageComposer } from "@/app/image/components/image-composer";
 import { ImageResults } from "@/app/image/components/image-results";
 import { ImageSidebar } from "@/app/image/components/image-sidebar";
 import { ImageLightbox } from "@/components/image-lightbox";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import type { ImageModel, PublicPanelConfig } from "@/lib/api";
+import {
+  fetchPublicMe,
+  logoutPublicUser,
+  redeemActivationCode,
+  type PublicUser,
+} from "@/lib/public-auth-api";
 import { editPublicImage, fetchPublicPanelStatus, generatePublicImage } from "@/lib/public-panel-api";
 import {
   clearImageConversations,
@@ -76,7 +86,7 @@ function readFileAsDataUrl(file: File) {
   });
 }
 
-function getStatusHint(status: PublicPanelConfig | null, statusError: string | null) {
+function getAnonymousStatusHint(status: PublicPanelConfig | null, statusError: string | null) {
   if (statusError) {
     return statusError;
   }
@@ -90,6 +100,22 @@ function getStatusHint(status: PublicPanelConfig | null, statusError: string | n
     return "公开额度已用尽";
   }
   return null;
+}
+
+async function resolvePublicUser(setter: (value: PublicUser | null) => void) {
+  try {
+    const response = await fetchPublicMe();
+    setter(response.user);
+    return response.user;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "读取登录状态失败";
+    if (message === "login required") {
+      await logoutPublicUser().catch(() => undefined);
+      setter(null);
+      return null;
+    }
+    throw error;
+  }
 }
 
 export default function PublicImagePageClient() {
@@ -109,6 +135,11 @@ export default function PublicImagePageClient() {
   const [generatingIds, setGeneratingIds] = useState<Set<string>>(new Set());
   const [panelStatus, setPanelStatus] = useState<PublicPanelConfig | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
+  const [publicUser, setPublicUser] = useState<PublicUser | null>(null);
+  const [isLoadingPublicUser, setIsLoadingPublicUser] = useState(true);
+  const [redeemCode, setRedeemCode] = useState("");
+  const [isRedeeming, setIsRedeeming] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
 
@@ -125,6 +156,8 @@ export default function PublicImagePageClient() {
         .map((img) => ({ id: img.id, src: `data:image/png;base64,${img.b64_json}` })),
     [selectedConversation],
   );
+  const composerQuotaLabel = publicUser ? publicUser.balance : panelStatus ? String(panelStatus.available_quota) : statusError ? "—" : "加载中";
+  const composerStatusHint = publicUser ? null : getAnonymousStatusHint(panelStatus, statusError);
 
   const loadStatus = useCallback(async () => {
     try {
@@ -133,6 +166,20 @@ export default function PublicImagePageClient() {
       setStatusError(null);
     } catch (error) {
       setStatusError(error instanceof Error ? error.message : "读取公共面板状态失败");
+    }
+  }, []);
+
+  const loadPublicUser = useCallback(async (options?: { silent?: boolean }) => {
+    try {
+      return await resolvePublicUser(setPublicUser);
+    } catch (error) {
+      setPublicUser(null);
+      if (!options?.silent) {
+        toast.error(error instanceof Error ? error.message : "读取登录状态失败");
+      }
+      return null;
+    } finally {
+      setIsLoadingPublicUser(false);
     }
   }, []);
 
@@ -156,15 +203,17 @@ export default function PublicImagePageClient() {
         }
       });
     void loadStatus();
+    void loadPublicUser({ silent: true });
     const handleFocus = () => {
       void loadStatus();
+      void loadPublicUser({ silent: true });
     };
     window.addEventListener("focus", handleFocus);
     return () => {
       cancelled = true;
       window.removeEventListener("focus", handleFocus);
     };
-  }, [loadStatus]);
+  }, [loadPublicUser, loadStatus]);
 
   useEffect(() => {
     if (selectedConversation || isSelectedGenerating) {
@@ -220,7 +269,7 @@ export default function PublicImagePageClient() {
   }, []);
 
   const handleGenerateImage = async () => {
-    const blockedReason = getStatusHint(panelStatus, statusError);
+    const blockedReason = composerStatusHint;
     if (blockedReason) {
       toast.error(blockedReason);
       return;
@@ -282,13 +331,13 @@ export default function PublicImagePageClient() {
         status: failedCount > 0 ? "error" : "success",
         error: failedCount > 0 ? `其中 ${failedCount} 张生成失败` : undefined,
       }));
-      await loadStatus();
+      await Promise.all([loadStatus(), loadPublicUser({ silent: true })]);
       toast[failedCount > 0 ? "error" : "success"](failedCount > 0 ? `已完成 ${successCount} 张，另有 ${failedCount} 张未生成成功` : imageMode === "edit" ? `已完成 ${successCount} 张图片编辑` : `已生成 ${successCount} 张图片`);
     } catch (error) {
       const message = error instanceof Error ? error.message : imageMode === "edit" ? "编辑图片失败" : "生成图片失败";
       await persistConversation({ ...draftConversation, status: "error", error: message, images: draftConversation.images.map((image) => ({ ...image, status: "error", error: message })) });
       toast.error(message);
-      await loadStatus();
+      await Promise.all([loadStatus(), loadPublicUser({ silent: true })]);
     } finally {
       setGeneratingIds((prev) => {
         const next = new Set(prev);
@@ -298,16 +347,145 @@ export default function PublicImagePageClient() {
     }
   };
 
+  const handleRedeem = async () => {
+    const normalizedCode = redeemCode.trim();
+    if (!normalizedCode) {
+      toast.error("请输入激活码");
+      return;
+    }
+
+    setIsRedeeming(true);
+    try {
+      await redeemActivationCode(normalizedCode);
+      setRedeemCode("");
+      await Promise.all([loadStatus(), loadPublicUser()]);
+      toast.success("激活码兑换成功");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "兑换激活码失败");
+    } finally {
+      setIsRedeeming(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    setIsLoggingOut(true);
+    try {
+      await logoutPublicUser();
+      setPublicUser(null);
+      setRedeemCode("");
+      toast.success("已退出登录");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "退出登录失败");
+    } finally {
+      setIsLoggingOut(false);
+    }
+  };
+
   return (
     <>
       <section className="px-3 pt-4">
-        <div className="rounded-[32px] border border-white/80 bg-white/90 px-6 py-6 shadow-sm">
-          <div className="flex items-start gap-4">
-            <div className="flex size-12 items-center justify-center rounded-2xl bg-stone-950 text-white"><Sparkles className="size-5" /></div>
-            <div className="space-y-2">
-              <h1 className="text-3xl font-semibold tracking-tight text-stone-950">{panelStatus?.title || "匿名公共生图面板"}</h1>
-              <p className="max-w-3xl text-sm leading-6 text-stone-500">{panelStatus?.description || "无需登录，直接生成图片或上传参考图进行编辑。"}</p>
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_360px]">
+          <div className="rounded-[32px] border border-white/80 bg-white/90 px-6 py-6 shadow-sm">
+            <div className="flex items-start gap-4">
+              <div className="flex size-12 items-center justify-center rounded-2xl bg-stone-950 text-white"><Sparkles className="size-5" /></div>
+              <div className="space-y-2">
+                <h1 className="text-3xl font-semibold tracking-tight text-stone-950">{panelStatus?.title || "匿名公共生图面板"}</h1>
+                <p className="max-w-3xl text-sm leading-6 text-stone-500">{panelStatus?.description || "无需登录，直接生成图片或上传参考图进行编辑。"}</p>
+              </div>
             </div>
+          </div>
+
+          <div className="rounded-[32px] border border-white/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.95),rgba(246,240,232,0.92))] p-5 shadow-sm">
+            {isLoadingPublicUser ? (
+              <div className="flex min-h-[204px] items-center justify-center gap-3 text-sm text-stone-500">
+                <LoaderCircle className="size-4 animate-spin" />
+                正在读取账户状态
+              </div>
+            ) : publicUser ? (
+              <div className="space-y-4">
+                <div className="space-y-3">
+                  <Badge variant="secondary" className="rounded-full bg-stone-950 px-3 py-1 text-[11px] tracking-[0.22em] text-white uppercase">
+                    Member
+                  </Badge>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2 text-stone-900">
+                        <UserRound className="size-4" />
+                        <span className="text-sm font-medium">{publicUser.username}</span>
+                      </div>
+                      <p className="mt-2 text-sm leading-6 text-stone-500">已登录。当前生图会优先使用你的个人余额，不占用匿名公共池。</p>
+                    </div>
+                    <div className="rounded-[20px] border border-stone-200/80 bg-white/85 px-4 py-3 text-right">
+                      <div className="text-xs text-stone-500">个人余额</div>
+                      <div className="mt-1 text-2xl font-semibold text-stone-950">{publicUser.balance}</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label htmlFor="activation-code" className="text-sm font-medium text-stone-700">
+                    兑换激活码
+                  </label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="activation-code"
+                      value={redeemCode}
+                      onChange={(event) => setRedeemCode(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          void handleRedeem();
+                        }
+                      }}
+                      placeholder="输入激活码"
+                      className="h-11 border-stone-200 bg-white"
+                    />
+                    <Button
+                      className="h-11 rounded-2xl bg-stone-950 px-4 text-white hover:bg-stone-800"
+                      onClick={() => void handleRedeem()}
+                      disabled={isRedeeming}
+                    >
+                      {isRedeeming ? <LoaderCircle className="size-4 animate-spin" /> : <Ticket className="size-4" />}
+                      兑换
+                    </Button>
+                  </div>
+                </div>
+
+                <Button
+                  variant="outline"
+                  className="h-11 w-full rounded-2xl border-stone-200 bg-white/80 text-stone-700 hover:bg-white"
+                  onClick={() => void handleLogout()}
+                  disabled={isLoggingOut}
+                >
+                  {isLoggingOut ? <LoaderCircle className="size-4 animate-spin" /> : <LogOut className="size-4" />}
+                  退出登录
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="space-y-3">
+                  <Badge variant="secondary" className="rounded-full bg-white px-3 py-1 text-[11px] tracking-[0.22em] text-stone-700 uppercase">
+                    Guest Access
+                  </Badge>
+                  <div className="space-y-2">
+                    <h2 className="text-xl font-semibold tracking-tight text-stone-950">匿名可直接创作，登录后可沉淀个人权益。</h2>
+                    <p className="text-sm leading-6 text-stone-500">注册后可以查看个人余额、兑换激活码，并把公开生图切换到你的会员账户。</p>
+                  </div>
+                </div>
+
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <Button asChild className="h-11 rounded-2xl bg-stone-950 text-white hover:bg-stone-800">
+                    <Link href="/login">登录</Link>
+                  </Button>
+                  <Button asChild variant="outline" className="h-11 rounded-2xl border-stone-200 bg-white/80 text-stone-700 hover:bg-white">
+                    <Link href="/login?mode=register">注册</Link>
+                  </Button>
+                </div>
+
+                <div className="rounded-[24px] border border-white/80 bg-white/70 p-4 text-sm leading-6 text-stone-600">
+                  匿名模式继续可用。登录只是为了绑定个人余额与激活码，不会打断现在的公开试用流程。
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </section>
@@ -325,8 +503,8 @@ export default function PublicImagePageClient() {
             prompt={imagePrompt}
             model={imageModel}
             imageCount={imageCount}
-            availableQuota={panelStatus ? String(panelStatus.available_quota) : statusError ? "—" : "加载中"}
-            statusHint={getStatusHint(panelStatus, statusError)}
+            availableQuota={composerQuotaLabel}
+            statusHint={composerStatusHint}
             hasAnyGenerating={generatingIds.size > 0}
             generatingCount={generatingIds.size}
             referenceImages={referenceImages}
@@ -344,7 +522,7 @@ export default function PublicImagePageClient() {
               setReferenceImageFiles((prev) => prev.filter((_, currentIndex) => currentIndex !== index));
               setReferenceImages((prev) => prev.filter((_, currentIndex) => currentIndex !== index));
             }}
-            submitBlocked={Boolean(getStatusHint(panelStatus, statusError))}
+            submitBlocked={Boolean(composerStatusHint)}
           />
         </div>
       </section>
