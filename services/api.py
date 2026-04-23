@@ -11,8 +11,14 @@ from fastapi.responses import FileResponse
 
 from services.account_service import account_service
 from services.api_admin import ImageGenerationRequest, register_admin_routes
+from services.api_comic import register_comic_routes
 from services.api_public_panel import register_public_panel_routes
 from services.chatgpt_service import ChatGPTService
+from services.comic.runner import ComicTaskRunner
+from services.comic.store import ComicProjectStore
+from services.comic.tasks import ComicTaskService
+from services.comic.worker import ComicWorker
+from services.comic.workflow import ComicWorkflowService
 from services.config import config
 from services.image_workflow_service import ImageWorkflowService
 from services.public_panel_service import PublicPanelService
@@ -100,16 +106,31 @@ def create_app() -> FastAPI:
     chatgpt_service = ChatGPTService(account_service)
     public_panel_service = PublicPanelService(config.public_panel_file)
     image_workflow_service = ImageWorkflowService(quota_gateway=public_panel_service, image_backend=chatgpt_service)
+    comic_store = ComicProjectStore(config.comic_projects_dir)
+    comic_task_service = ComicTaskService(comic_store)
+    comic_workflow_service = ComicWorkflowService(chatgpt_service)
+    comic_task_runner = ComicTaskRunner(
+        store=comic_store,
+        task_service=comic_task_service,
+        workflow_service=comic_workflow_service,
+    )
+    comic_worker = ComicWorker(task_service=comic_task_service, runner=comic_task_runner.run_task)
     app_version = get_app_version()
 
     @asynccontextmanager
-    async def lifespan(_: FastAPI):
+    async def lifespan(app: FastAPI):
         stop_event = Event()
         thread = start_limited_account_watcher(stop_event)
+        comic_worker.start()
         try:
+            app.state.comic_store = comic_store
+            app.state.comic_task_service = comic_task_service
+            app.state.comic_task_runner = comic_task_runner
+            app.state.comic_worker = comic_worker
             yield
         finally:
             stop_event.set()
+            comic_worker.stop()
             thread.join(timeout=1)
 
     app = FastAPI(title="chatgpt2api", version=app_version, lifespan=lifespan)
@@ -129,6 +150,7 @@ def create_app() -> FastAPI:
         image_request_model=ImageGenerationRequest,
         require_auth_key=require_auth_key,
     )
+    register_comic_routes(router)
 
     app.include_router(router)
 
