@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
+from services.public_money import format_cents
 from services.public_money import parse_money_to_cents
 
 
@@ -38,9 +39,22 @@ def register_admin_billing_routes(router: APIRouter, *, billing_store, require_a
         return {"items": updated}
 
     @router.get("/api/admin/billing/activation-codes")
-    async def list_activation_codes(authorization: str | None = Header(default=None)):
+    async def list_activation_codes(
+        authorization: str | None = Header(default=None),
+        status: str | None = None,
+        batch_note: str | None = None,
+        redeemed_username: str | None = None,
+    ):
         require_auth_key(authorization)
-        return {"items": _serialize_activation_codes(billing_store.list_activation_codes())}
+        return {
+            "items": _serialize_activation_codes(
+                billing_store.list_activation_codes(
+                    status=_normalize_optional_text(status),
+                    batch_note=_normalize_optional_text(batch_note),
+                    redeemed_username=_normalize_optional_text(redeemed_username),
+                )
+            )
+        }
 
     @router.post("/api/admin/billing/activation-codes")
     async def create_activation_codes(body: ActivationCodeBatchRequest, authorization: str | None = Header(default=None)):
@@ -67,4 +81,11 @@ def _serialize_activation_codes(items: list[dict[str, object]]) -> list[dict[str
 
 
 def _serialize_activation_code(item: dict[str, object]) -> dict[str, object]:
-    return {**item, "amount": f"{int(item['amount_cents']) / 100:.2f}"}
+    return {**item, "amount": format_cents(int(item["amount_cents"]))}
+
+
+def _normalize_optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None

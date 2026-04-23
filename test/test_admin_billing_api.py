@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from services.api import create_app
 from services.config import config
+from services.public_auth_service import PublicAuthService
 from services.public_billing_store import PublicBillingStore
 
 
@@ -135,6 +136,74 @@ def test_admin_can_batch_generate_activation_codes(tmp_path: Path) -> None:
 
     assert list_response.status_code == 200
     assert len(list_response.json()["items"]) == 2
+
+
+def test_admin_activation_codes_can_filter_by_status(tmp_path: Path) -> None:
+    db_file = tmp_path / "public_billing.db"
+    store = PublicBillingStore(db_file)
+    user = store.create_user(username="demo", password_hash="hash", signup_bonus_cents=0)
+    code = store.create_activation_codes(count=1, amount_cents=550, batch_note="spring")[0]["code"]
+    auth_service = PublicAuthService(store)
+    auth_service.redeem_activation_code(code=code, user_id=user["id"])
+
+    with with_public_billing_file(db_file):
+        client = TestClient(create_app(), base_url="https://testserver")
+        unused_response = client.get(
+            "/api/admin/billing/activation-codes",
+            headers=admin_headers(),
+            params={"status": "unused"},
+        )
+        redeemed_response = client.get(
+            "/api/admin/billing/activation-codes",
+            headers=admin_headers(),
+            params={"status": "redeemed"},
+        )
+
+    assert unused_response.status_code == 200
+    assert all(item["status"] == "unused" for item in unused_response.json()["items"])
+    assert redeemed_response.status_code == 200
+    assert all(item["status"] == "redeemed" for item in redeemed_response.json()["items"])
+
+
+def test_admin_activation_codes_can_filter_by_batch_note(tmp_path: Path) -> None:
+    db_file = tmp_path / "public_billing.db"
+    store = PublicBillingStore(db_file)
+    store.create_activation_codes(count=1, amount_cents=550, batch_note="spring")
+    store.create_activation_codes(count=1, amount_cents=550, batch_note="summer")
+
+    with with_public_billing_file(db_file):
+        client = TestClient(create_app(), base_url="https://testserver")
+        response = client.get(
+            "/api/admin/billing/activation-codes",
+            headers=admin_headers(),
+            params={"batch_note": "spring"},
+        )
+
+    assert response.status_code == 200
+    assert {item["batch_note"] for item in response.json()["items"]} == {"spring"}
+
+
+def test_admin_activation_codes_can_filter_by_redeemed_username(tmp_path: Path) -> None:
+    db_file = tmp_path / "public_billing.db"
+    store = PublicBillingStore(db_file)
+    auth_service = PublicAuthService(store)
+    alice = store.create_user(username="alice", password_hash="hash", signup_bonus_cents=0)
+    bob = store.create_user(username="bob", password_hash="hash", signup_bonus_cents=0)
+    alice_code = store.create_activation_codes(count=1, amount_cents=550, batch_note="spring")[0]["code"]
+    bob_code = store.create_activation_codes(count=1, amount_cents=550, batch_note="spring")[0]["code"]
+    auth_service.redeem_activation_code(code=alice_code, user_id=alice["id"])
+    auth_service.redeem_activation_code(code=bob_code, user_id=bob["id"])
+
+    with with_public_billing_file(db_file):
+        client = TestClient(create_app(), base_url="https://testserver")
+        response = client.get(
+            "/api/admin/billing/activation-codes",
+            headers=admin_headers(),
+            params={"redeemed_username": "alice"},
+        )
+
+    assert response.status_code == 200
+    assert {item["redeemed_by_user_id"] for item in response.json()["items"]} == {alice["id"]}
 
 
 def test_admin_store_helpers_cover_model_pricing_and_activation_codes(tmp_path: Path) -> None:

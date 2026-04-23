@@ -61,21 +61,10 @@ class PublicBillingStore:
 
     def get_user_auth_by_username(self, username: str) -> dict[str, str] | None:
         with self._lock, self._connect() as conn:
-            row = conn.execute(
-                "SELECT id, username, password_hash, balance_cents, status, created_at, updated_at FROM users WHERE username = ?",
-                (username,),
-            ).fetchone()
+            row = conn.execute("SELECT id, username, password_hash, balance_cents, status, created_at, updated_at FROM users WHERE username = ?", (username,)).fetchone()
         if row is None:
             return None
-        return {
-            "id": str(row["id"]),
-            "username": str(row["username"]),
-            "password_hash": str(row["password_hash"]),
-            "balance": self._format_money(int(row["balance_cents"])),
-            "status": str(row["status"]),
-            "created_at": str(row["created_at"]),
-            "updated_at": str(row["updated_at"]),
-        }
+        return {"id": str(row["id"]), "username": str(row["username"]), "password_hash": str(row["password_hash"]), "balance": self._format_money(int(row["balance_cents"])), "status": str(row["status"]), "created_at": str(row["created_at"]), "updated_at": str(row["updated_at"])}
 
     def get_user_by_session_token_hash(self, token_hash: str) -> dict[str, str] | None:
         now = self._now()
@@ -112,30 +101,29 @@ class PublicBillingStore:
             conn.execute("BEGIN IMMEDIATE")
             for _ in range(code_count):
                 code = self._generate_activation_code(conn)
-                cursor = conn.execute(
-                    """
-                    INSERT INTO activation_codes (
-                        code, amount_cents, batch_note, status, created_at
-                    )
-                    VALUES (?, ?, ?, 'unused', ?)
-                    """,
-                    (code, prize_cents, batch_note, created_at),
-                )
-                row = conn.execute(
-                    """
-                    SELECT id, code, amount_cents, batch_note, status, created_at,
-                           redeemed_by_user_id, redeemed_at
-                    FROM activation_codes
-                    WHERE id = ?
-                    """,
-                    (cursor.lastrowid,),
-                ).fetchone()
+                cursor = conn.execute("INSERT INTO activation_codes (code, amount_cents, batch_note, status, created_at) VALUES (?, ?, ?, 'unused', ?)", (code, prize_cents, batch_note, created_at))
+                row = conn.execute("SELECT id, code, amount_cents, batch_note, status, created_at, redeemed_by_user_id, redeemed_at FROM activation_codes WHERE id = ?", (cursor.lastrowid,)).fetchone()
                 rows.append(self._format_activation_code(row))
         return rows
 
-    def list_activation_codes(self) -> list[dict[str, object]]:
+    def list_activation_codes(
+        self,
+        *,
+        status: str | None = None,
+        batch_note: str | None = None,
+        redeemed_username: str | None = None,
+    ) -> list[dict[str, object]]:
         with self._lock, self._connect() as conn:
-            rows = conn.execute("SELECT id, code, amount_cents, batch_note, status, created_at, redeemed_by_user_id, redeemed_at FROM activation_codes ORDER BY id DESC").fetchall()
+            query = ["SELECT ac.id, ac.code, ac.amount_cents, ac.batch_note, ac.status, ac.created_at, ac.redeemed_by_user_id, ac.redeemed_at", "FROM activation_codes AS ac"]
+            params: list[object] = []
+            if redeemed_username is not None:
+                query.append("LEFT JOIN users AS u ON u.id = ac.redeemed_by_user_id")
+            conditions = [clause for clause, value in (("ac.status = ?", status), ("ac.batch_note = ?", batch_note), ("u.username = ?", redeemed_username)) if value is not None]
+            params.extend([value for value in (status, batch_note, redeemed_username) if value is not None])
+            if conditions:
+                query.append("WHERE " + " AND ".join(conditions))
+            query.append("ORDER BY ac.id DESC")
+            rows = conn.execute(" ".join(query), params).fetchall()
         return [self._format_activation_code(row) for row in rows]
 
     def redeem_activation_code(self, *, code: str, user_id: str) -> dict[str, object]:
