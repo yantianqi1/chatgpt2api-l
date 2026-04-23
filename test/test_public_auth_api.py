@@ -45,9 +45,29 @@ def test_login_rejects_invalid_password(tmp_path: Path) -> None:
 def test_redeem_requires_login(tmp_path: Path) -> None:
     with with_public_billing_file(tmp_path / "public_billing.db"):
         client = TestClient(create_app(), base_url="https://testserver")
-        response = client.post("/api/public-auth/redeem")
+        response = client.post("/api/public-auth/redeem", json={"code": "A" * 32})
 
     assert response.status_code == 401
+
+
+def test_redeem_adds_balance_for_logged_in_user(tmp_path: Path) -> None:
+    with with_public_billing_file(tmp_path / "public_billing.db"):
+        client = TestClient(create_app(), base_url="https://testserver")
+        register_response = client.post("/api/public-auth/register", json={"username": "demo", "password": "secret"})
+        code_response = client.post(
+            "/api/admin/billing/activation-codes",
+            headers={"Authorization": f"Bearer {config.auth_key}"},
+            json={"count": 1, "amount": "5.50", "batch_note": "launch"},
+        )
+        code = code_response.json()["items"][0]["code"]
+
+        redeem_response = client.post("/api/public-auth/redeem", json={"code": code})
+        me_response = client.get("/api/public-auth/me")
+
+    assert register_response.status_code == 200
+    assert redeem_response.status_code == 200
+    assert me_response.status_code == 200
+    assert me_response.json()["user"]["balance"] == "6.50"
 
 
 def test_me_returns_current_user_and_logout_clears_session_cookie(tmp_path: Path) -> None:

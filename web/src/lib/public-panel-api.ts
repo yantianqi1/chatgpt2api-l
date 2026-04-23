@@ -10,6 +10,7 @@ export async function fetchPublicPanelStatus() {
   return httpRequest<PublicPanelConfig>("/api/public-panel/status", {
     redirectOnUnauthorized: false,
     skipAuth: true,
+    withCredentials: true,
   });
 }
 
@@ -24,6 +25,7 @@ export async function generatePublicImage(prompt: string, model: ImageModel = "g
     },
     redirectOnUnauthorized: false,
     skipAuth: true,
+    withCredentials: true,
   });
 }
 
@@ -43,5 +45,6 @@ export async function editPublicImage(files: File | File[], prompt: string, mode
     body: formData,
     redirectOnUnauthorized: false,
     skipAuth: true,
+    withCredentials: true,
   });
 }

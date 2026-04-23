@@ -31,7 +31,8 @@ def resolve_web_dist_dir() -> Path:
 
 
 WEB_DIST_DIR = resolve_web_dist_dir()
-STUDIO_BLOCKED_PREFIXES = ("accounts", "settings", "login", "image")
+STUDIO_BLOCKED_PREFIXES = ("accounts", "settings", "image")
+LOCAL_CORS_ORIGIN_REGEX = r"https?://(localhost|127\.0\.0\.1)(:\d+)?$"
 
 
 def extract_bearer_token(authorization: str | None) -> str:
@@ -100,6 +101,13 @@ def should_block_studio_page(requested_path: str) -> bool:
     return any(clean_path == prefix or clean_path.startswith(f"{prefix}/") for prefix in STUDIO_BLOCKED_PREFIXES)
 
 
+def resolve_cors_allowed_origins() -> list[str]:
+    raw = str(os.getenv("CHATGPT2API_CORS_ALLOWED_ORIGINS") or "").strip()
+    if not raw:
+        return []
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
 def create_app() -> FastAPI:
     chatgpt_service = ChatGPTService(account_service)
     billing_store = PublicBillingStore(config.public_billing_file)
@@ -125,8 +133,9 @@ def create_app() -> FastAPI:
     app = FastAPI(title="chatgpt2api", version=app_version, lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=False,
+        allow_origins=resolve_cors_allowed_origins(),
+        allow_origin_regex=LOCAL_CORS_ORIGIN_REGEX,
+        allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )

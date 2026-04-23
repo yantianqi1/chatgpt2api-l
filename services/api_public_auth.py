@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Cookie, HTTPException, Response
+from fastapi import APIRouter, Cookie, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from services.public_auth_service import SESSION_TTL_DAYS
@@ -25,32 +25,40 @@ class PublicAuthLoginRequest(BaseModel):
     password: str = Field(..., min_length=1)
 
 
+class PublicAuthRedeemRequest(BaseModel):
+    code: str = Field(..., min_length=1)
+
+
 def register_public_auth_routes(router: APIRouter, *, auth_service, billing_store) -> None:
     @router.post("/api/public-auth/register")
-    async def register(body: PublicAuthRegisterRequest, response: Response):
+    async def register(body: PublicAuthRegisterRequest, request: Request, response: Response):
         user = _create_user(billing_store, auth_service, body.username, body.password)
         token, _ = auth_service.create_session(user["id"])
-        _set_session_cookie(response, token)
+        _set_session_cookie(request, response, token)
         return {"user": user}
 
     @router.post("/api/public-auth/login")
-    async def login(body: PublicAuthLoginRequest, response: Response):
+    async def login(body: PublicAuthLoginRequest, request: Request, response: Response):
         user = billing_store.get_user_auth_by_username(body.username)
         if user is None or not auth_service.verify_password(body.password, user["password_hash"]):
             raise HTTPException(status_code=401, detail={"error": "invalid credentials"})
         token, _ = auth_service.create_session(user["id"])
-        _set_session_cookie(response, token)
+        _set_session_cookie(request, response, token)
         return {"user": _public_user(user)}
 
     @router.post("/api/public-auth/logout")
-    async def logout(response: Response, session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME)):
+    async def logout(
+        request: Request,
+        response: Response,
+        session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
+    ):
         if session_token:
             auth_service.delete_session_by_token(session_token)
         response.set_cookie(
             key=SESSION_COOKIE_NAME,
             value="",
             httponly=True,
-            secure=True,
+            secure=_should_use_secure_cookie(request),
             samesite="lax",
             max_age=0,
             expires=0,
@@ -64,9 +72,16 @@ def register_public_auth_routes(router: APIRouter, *, auth_service, billing_stor
         return {"user": user}
 
     @router.post("/api/public-auth/redeem")
-    async def redeem(session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME)):
-        _require_session(auth_service, session_token)
-        raise HTTPException(status_code=501, detail={"error": "redeem is not implemented yet"})
+    async def redeem(
+        body: PublicAuthRedeemRequest,
+        session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
+    ):
+        user = _require_session(auth_service, session_token)
+        try:
+            result = auth_service.redeem_activation_code(code=body.code.strip(), user_id=user["id"])
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+        return {"ok": True, "redemption": result}
 
 
 def _create_user(billing_store, auth_service, username: str, password: str) -> dict[str, str]:
@@ -100,15 +115,22 @@ def _public_user(user: dict[str, str]) -> dict[str, str]:
     }
 
 
-def _set_session_cookie(response: Response, token: str) -> None:
+def _set_session_cookie(request: Request, response: Response, token: str) -> None:
     expires_at = datetime.now(timezone.utc) + timedelta(days=SESSION_TTL_DAYS)
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=token,
         httponly=True,
-        secure=True,
+        secure=_should_use_secure_cookie(request),
         samesite="lax",
         max_age=SESSION_TTL_SECONDS,
         expires=expires_at,
         path=SESSION_COOKIE_PATH,
     )
+
+
+def _should_use_secure_cookie(request: Request) -> bool:
+    forwarded_proto = str(request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+    if forwarded_proto:
+        return forwarded_proto == "https"
+    return request.url.scheme == "https"
