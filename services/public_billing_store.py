@@ -116,8 +116,35 @@ class PublicBillingStore:
                 WHERE id = ?
                 """,
                 (user_id,),
-            ).fetchone()
+        ).fetchone()
         return self._format_user(row)
+
+    def create_session(
+        self,
+        *,
+        user_id: int,
+        token_hash: str,
+        expires_at: str,
+        created_at: str,
+        last_seen_at: str,
+    ) -> dict[str, str]:
+        with self._lock, self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO user_sessions (user_id, token_hash, expires_at, created_at, last_seen_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (user_id, token_hash, expires_at, created_at, last_seen_at),
+            )
+            row = conn.execute(
+                """
+                SELECT id, user_id, token_hash, expires_at, created_at, last_seen_at
+                FROM user_sessions
+                WHERE id = ?
+                """,
+                (cursor.lastrowid,),
+            ).fetchone()
+        return self._format_session(row)
 
     def _init_db(self) -> None:
         self.db_file.parent.mkdir(parents=True, exist_ok=True)
@@ -177,4 +204,15 @@ class PublicBillingStore:
             "status": str(row["status"]),
             "created_at": str(row["created_at"]),
             "updated_at": str(row["updated_at"]),
+        }
+
+    @staticmethod
+    def _format_session(row: sqlite3.Row) -> dict[str, str]:
+        return {
+            "id": str(row["id"]),
+            "user_id": str(row["user_id"]),
+            "token_hash": str(row["token_hash"]),
+            "expires_at": str(row["expires_at"]),
+            "created_at": str(row["created_at"]),
+            "last_seen_at": str(row["last_seen_at"]),
         }
