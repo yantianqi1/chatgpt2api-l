@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Cookie, HTTPException, Response
 from pydantic import BaseModel, Field
+
+from services.public_auth_service import SESSION_TTL_DAYS
 
 
 SESSION_COOKIE_NAME = "public_auth_session"
 SESSION_COOKIE_PATH = "/"
 SIGNUP_BONUS_CENTS = 100
+SESSION_TTL_SECONDS = int(timedelta(days=SESSION_TTL_DAYS).total_seconds())
 
 
 class PublicAuthRegisterRequest(BaseModel):
@@ -42,7 +46,16 @@ def register_public_auth_routes(router: APIRouter, *, auth_service, billing_stor
     async def logout(response: Response, session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME)):
         if session_token:
             auth_service.delete_session_by_token(session_token)
-        response.delete_cookie(SESSION_COOKIE_NAME, path=SESSION_COOKIE_PATH)
+        response.set_cookie(
+            key=SESSION_COOKIE_NAME,
+            value="",
+            httponly=True,
+            secure=True,
+            samesite="lax",
+            max_age=0,
+            expires=0,
+            path=SESSION_COOKIE_PATH,
+        )
         return {"ok": True}
 
     @router.get("/api/public-auth/me")
@@ -88,10 +101,14 @@ def _public_user(user: dict[str, str]) -> dict[str, str]:
 
 
 def _set_session_cookie(response: Response, token: str) -> None:
+    expires_at = datetime.now(timezone.utc) + timedelta(days=SESSION_TTL_DAYS)
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=token,
         httponly=True,
+        secure=True,
         samesite="lax",
+        max_age=SESSION_TTL_SECONDS,
+        expires=expires_at,
         path=SESSION_COOKIE_PATH,
     )
