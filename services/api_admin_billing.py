@@ -27,9 +27,10 @@ def register_admin_billing_routes(router: APIRouter, *, billing_store, require_a
     @router.post("/api/admin/billing/model-pricing")
     async def update_model_pricing(body: ModelPricingUpdateRequest, authorization: str | None = Header(default=None)):
         require_auth_key(authorization)
+        model = _parse_model_name(body.model)
         updated = billing_store.update_model_pricing(
-            model=body.model.strip(),
-            price_cents=parse_money_to_cents(body.price),
+            model=model,
+            price_cents=_parse_money(body.price),
             enabled=body.enabled,
         )
         if not updated:
@@ -39,9 +40,31 @@ def register_admin_billing_routes(router: APIRouter, *, billing_store, require_a
     @router.get("/api/admin/billing/activation-codes")
     async def list_activation_codes(authorization: str | None = Header(default=None)):
         require_auth_key(authorization)
-        return {"items": billing_store.list_activation_codes()}
+        return {"items": _serialize_activation_codes(billing_store.list_activation_codes())}
 
     @router.post("/api/admin/billing/activation-codes")
     async def create_activation_codes(body: ActivationCodeBatchRequest, authorization: str | None = Header(default=None)):
         require_auth_key(authorization)
-        return {"items": billing_store.create_activation_codes(count=body.count, amount_cents=parse_money_to_cents(body.amount), batch_note=body.batch_note)}
+        return {"items": _serialize_activation_codes(billing_store.create_activation_codes(count=body.count, amount_cents=_parse_money(body.amount), batch_note=body.batch_note))}
+
+
+def _parse_model_name(value: str) -> str:
+    model = str(value or "").strip()
+    if not model:
+        raise HTTPException(status_code=400, detail={"error": "model is required"})
+    return model
+
+
+def _parse_money(value: str | int | float) -> int:
+    try:
+        return parse_money_to_cents(value)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+
+
+def _serialize_activation_codes(items: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [_serialize_activation_code(item) for item in items]
+
+
+def _serialize_activation_code(item: dict[str, object]) -> dict[str, object]:
+    return {**item, "amount": f"{int(item['amount_cents']) / 100:.2f}"}

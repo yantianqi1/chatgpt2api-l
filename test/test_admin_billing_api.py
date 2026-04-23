@@ -75,6 +75,42 @@ def test_admin_update_model_pricing_returns_404_for_unknown_model(tmp_path: Path
     assert response.status_code == 404
 
 
+def test_admin_update_model_pricing_rejects_invalid_price(tmp_path: Path) -> None:
+    with with_public_billing_file(tmp_path / "public_billing.db"):
+        client = TestClient(create_app(), base_url="https://testserver")
+        response = client.post(
+            "/api/admin/billing/model-pricing",
+            headers=admin_headers(),
+            json={"model": "gpt-image-1", "price": "bad", "enabled": True},
+        )
+
+    assert response.status_code == 400
+
+
+def test_admin_create_activation_codes_rejects_invalid_amount(tmp_path: Path) -> None:
+    with with_public_billing_file(tmp_path / "public_billing.db"):
+        client = TestClient(create_app(), base_url="https://testserver")
+        response = client.post(
+            "/api/admin/billing/activation-codes",
+            headers=admin_headers(),
+            json={"count": 2, "amount": "bad", "batch_note": "spring"},
+        )
+
+    assert response.status_code == 400
+
+
+def test_admin_update_model_pricing_rejects_blank_model(tmp_path: Path) -> None:
+    with with_public_billing_file(tmp_path / "public_billing.db"):
+        client = TestClient(create_app(), base_url="https://testserver")
+        response = client.post(
+            "/api/admin/billing/model-pricing",
+            headers=admin_headers(),
+            json={"model": "   ", "price": "2.50", "enabled": True},
+        )
+
+    assert response.status_code == 400
+
+
 def test_admin_can_batch_generate_activation_codes(tmp_path: Path) -> None:
     db_file = tmp_path / "public_billing.db"
 
@@ -106,7 +142,10 @@ def test_admin_store_helpers_cover_model_pricing_and_activation_codes(tmp_path: 
 
     updated = store.update_model_pricing(model="gpt-image-1", price_cents=250, enabled=False)
     codes = store.list_activation_codes()
+    generated_code = store.create_activation_codes(count=1, amount_cents=550, batch_note="spring")[0]
 
     assert updated[0]["price"] == "2.50"
     assert updated[0]["enabled"] == "0"
+    assert generated_code["amount_cents"] == 550
+    assert "amount" not in generated_code
     assert codes == []

@@ -292,4 +292,4 @@ class PublicBillingStore:
         return {"id": str(row["id"]), "user_id": str(row["user_id"]), "expires_at": str(row["expires_at"]), "created_at": str(row["created_at"]), "last_seen_at": str(row["last_seen_at"])}
 
     def _format_activation_code(self, row: sqlite3.Row) -> dict[str, object]:
-        return {"id": str(row["id"]), "code": str(row["code"]), "amount": self._format_money(int(row["amount_cents"])), "batch_note": str(row["batch_note"]), "status": str(row["status"]), "created_at": str(row["created_at"]), "redeemed_by_user_id": None if row["redeemed_by_user_id"] is None else str(row["redeemed_by_user_id"]), "redeemed_at": None if row["redeemed_at"] is None else str(row["redeemed_at"])}
+        return {"id": str(row["id"]), "code": str(row["code"]), "amount_cents": int(row["amount_cents"]), "batch_note": str(row["batch_note"]), "status": str(row["status"]), "created_at": str(row["created_at"]), "redeemed_by_user_id": None if row["redeemed_by_user_id"] is None else str(row["redeemed_by_user_id"]), "redeemed_at": None if row["redeemed_at"] is None else str(row["redeemed_at"])}
