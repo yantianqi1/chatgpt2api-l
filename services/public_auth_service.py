@@ -65,6 +65,9 @@ class PublicAuthService:
         )
         return token, session
 
+    def redeem_activation_code(self, *, code: str, user_id: str) -> dict[str, object]:
+        return self._billing_store.redeem_activation_code(code=code, user_id=user_id)
+
     @staticmethod
     def _encode_password_hash(salt: bytes, derived: bytes) -> str:
         return f"{PASSWORD_ALGORITHM}${PASSWORD_ITERATIONS}${salt.hex()}${derived.hex()}"

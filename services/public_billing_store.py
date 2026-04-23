@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import secrets
 import sqlite3
 from pathlib import Path
 from threading import Lock
 from datetime import datetime, timezone
 
+ACTIVATION_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+ACTIVATION_CODE_LENGTH = 32
 MODEL_PRICE_SEEDS = (
     ("gpt-image-1", 100),
     ("gpt-image-2", 100),
@@ -192,6 +195,115 @@ class PublicBillingStore:
             ).fetchone()
         return self._format_session(row)
 
+    def create_activation_codes(
+        self,
+        *,
+        count: int,
+        amount_cents: int,
+        batch_note: str,
+    ) -> list[dict[str, object]]:
+        code_count = self._require_positive_int(count, name="count")
+        prize_cents = self._require_nonnegative_cents(amount_cents, name="amount_cents")
+        created_at = self._now()
+        rows: list[dict[str, object]] = []
+        with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            for _ in range(code_count):
+                code = self._generate_activation_code(conn)
+                cursor = conn.execute(
+                    """
+                    INSERT INTO activation_codes (
+                        code, amount_cents, batch_note, status, created_at
+                    )
+                    VALUES (?, ?, ?, 'unused', ?)
+                    """,
+                    (code, prize_cents, batch_note, created_at),
+                )
+                row = conn.execute(
+                    """
+                    SELECT id, code, amount_cents, batch_note, status, created_at,
+                           redeemed_by_user_id, redeemed_at
+                    FROM activation_codes
+                    WHERE id = ?
+                    """,
+                    (cursor.lastrowid,),
+                ).fetchone()
+                rows.append(self._format_activation_code(row))
+        return rows
+
+    def redeem_activation_code(self, *, code: str, user_id: str) -> dict[str, object]:
+        if isinstance(code, bool) or not isinstance(code, str) or not code:
+            raise TypeError("code must be a non-empty str")
+        user_db_id = int(user_id)
+        redeemed_at = self._now()
+        with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            code_row = conn.execute(
+                """
+                SELECT id, code, amount_cents, batch_note, status, created_at
+                FROM activation_codes
+                WHERE code = ?
+                """,
+                (code,),
+            ).fetchone()
+            if code_row is None:
+                raise ValueError("activation code not found")
+            if str(code_row["status"]) != "unused":
+                raise ValueError("activation code already redeemed")
+            user_row = conn.execute(
+                "SELECT id, balance_cents FROM users WHERE id = ?",
+                (user_db_id,),
+            ).fetchone()
+            if user_row is None:
+                raise ValueError("user not found")
+            amount_cents = int(code_row["amount_cents"])
+            balance_after_cents = int(user_row["balance_cents"]) + amount_cents
+            conn.execute(
+                """
+                UPDATE users
+                SET balance_cents = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (balance_after_cents, redeemed_at, user_db_id),
+            )
+            conn.execute(
+                """
+                UPDATE activation_codes
+                SET status = 'redeemed', redeemed_by_user_id = ?, redeemed_at = ?
+                WHERE id = ?
+                """,
+                (user_db_id, redeemed_at, int(code_row["id"])),
+            )
+            conn.execute(
+                """
+                INSERT INTO quota_ledger (
+                    scope, user_id, change_cents, balance_after_cents, reason,
+                    reference_type, reference_id, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "user",
+                    user_db_id,
+                    amount_cents,
+                    balance_after_cents,
+                    "activation_code_redeem",
+                    "activation_code",
+                    code,
+                    redeemed_at,
+                ),
+            )
+            row = conn.execute(
+                """
+                SELECT id, code, amount_cents, batch_note, status, created_at,
+                       redeemed_by_user_id, redeemed_at
+                FROM activation_codes
+                WHERE id = ?
+                """,
+                (int(code_row["id"]),),
+            ).fetchone()
+        return self._format_activation_code(row)
+
     def _init_db(self) -> None:
         self.db_file.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
@@ -235,6 +347,23 @@ class PublicBillingStore:
             raise ValueError(f"{name} must be greater than or equal to 0")
         return value
 
+    @staticmethod
+    def _require_positive_int(value: object, *, name: str) -> int:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise TypeError(f"{name} must be an int")
+        if value <= 0:
+            raise ValueError(f"{name} must be greater than 0")
+        return value
+
+    def _generate_activation_code(self, conn: sqlite3.Connection) -> str:
+        while True:
+            code = "".join(secrets.choice(ACTIVATION_CODE_ALPHABET) for _ in range(ACTIVATION_CODE_LENGTH))
+            if conn.execute(
+                "SELECT 1 FROM activation_codes WHERE code = ?",
+                (code,),
+            ).fetchone() is None:
+                return code
+
     def _format_model_pricing(self, row: sqlite3.Row) -> dict[str, str]:
         return {
             "model": str(row["model"]),
@@ -260,4 +389,16 @@ class PublicBillingStore:
             "expires_at": str(row["expires_at"]),
             "created_at": str(row["created_at"]),
             "last_seen_at": str(row["last_seen_at"]),
+        }
+
+    def _format_activation_code(self, row: sqlite3.Row) -> dict[str, object]:
+        return {
+            "id": str(row["id"]),
+            "code": str(row["code"]),
+            "amount_cents": int(row["amount_cents"]),
+            "batch_note": str(row["batch_note"]),
+            "status": str(row["status"]),
+            "created_at": str(row["created_at"]),
+            "redeemed_by_user_id": None if row["redeemed_by_user_id"] is None else str(row["redeemed_by_user_id"]),
+            "redeemed_at": None if row["redeemed_at"] is None else str(row["redeemed_at"]),
         }
