@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 
 from services.account_service import account_service
 from services.api_admin import ImageGenerationRequest, register_admin_routes
+from services.api_admin_billing import register_admin_billing_routes
 from services.api_public_auth import register_public_auth_routes
 from services.api_public_panel import register_public_panel_routes
 from services.chatgpt_service import ChatGPTService
@@ -127,6 +128,7 @@ def create_app() -> FastAPI:
     )
     router = APIRouter()
     register_admin_routes(router, app_version=app_version, chatgpt_service=chatgpt_service, require_auth_key=require_auth_key)
+    register_admin_billing_routes(router, billing_store=billing_store, require_auth_key=require_auth_key)
     register_public_auth_routes(router, auth_service=auth_service, billing_store=billing_store)
     register_public_panel_routes(
         router,
