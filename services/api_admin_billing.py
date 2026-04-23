@@ -71,9 +71,12 @@ def _parse_model_name(value: str) -> str:
 
 def _parse_money(value: str | int | float) -> int:
     try:
-        return parse_money_to_cents(value)
+        amount_cents = parse_money_to_cents(value)
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
+    if amount_cents < 0:
+        raise HTTPException(status_code=400, detail={"error": "value must be greater than or equal to 0"})
+    return amount_cents
 
 
 def _serialize_activation_codes(items: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -94,4 +97,5 @@ def _normalize_optional_text(value: str | None) -> str | None:
 def _normalize_batch_note(value: str | None) -> str | None:
     if value is None:
         return None
+    # Preserve the raw query value so `?batch_note=` can target empty-string rows.
     return value

@@ -88,6 +88,18 @@ def test_admin_update_model_pricing_rejects_invalid_price(tmp_path: Path) -> Non
     assert response.status_code == 400
 
 
+def test_admin_update_model_pricing_rejects_negative_price(tmp_path: Path) -> None:
+    with with_public_billing_file(tmp_path / "public_billing.db"):
+        client = TestClient(create_app(), base_url="https://testserver")
+        response = client.post(
+            "/api/admin/billing/model-pricing",
+            headers=admin_headers(),
+            json={"model": "gpt-image-1", "price": "-1.00", "enabled": True},
+        )
+
+    assert response.status_code == 400
+
+
 def test_admin_create_activation_codes_rejects_invalid_amount(tmp_path: Path) -> None:
     with with_public_billing_file(tmp_path / "public_billing.db"):
         client = TestClient(create_app(), base_url="https://testserver")
@@ -95,6 +107,18 @@ def test_admin_create_activation_codes_rejects_invalid_amount(tmp_path: Path) ->
             "/api/admin/billing/activation-codes",
             headers=admin_headers(),
             json={"count": 2, "amount": "bad", "batch_note": "spring"},
+        )
+
+    assert response.status_code == 400
+
+
+def test_admin_create_activation_codes_rejects_negative_amount(tmp_path: Path) -> None:
+    with with_public_billing_file(tmp_path / "public_billing.db"):
+        client = TestClient(create_app(), base_url="https://testserver")
+        response = client.post(
+            "/api/admin/billing/activation-codes",
+            headers=admin_headers(),
+            json={"count": 2, "amount": "-1.00", "batch_note": "spring"},
         )
 
     assert response.status_code == 400
