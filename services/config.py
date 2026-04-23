@@ -17,6 +17,7 @@ class AppSettings:
     host: str
     port: int
     accounts_file: Path
+    public_billing_file: Path
     public_panel_file: Path
     refresh_account_interval_minute: int
 
@@ -77,6 +78,7 @@ def _load_settings() -> AppSettings:
         host="0.0.0.0",
         port=8000,
         accounts_file=DATA_DIR / "accounts.json",
+        public_billing_file=DATA_DIR / "public_billing.db",
         public_panel_file=DATA_DIR / "public_panel.json",
         refresh_account_interval_minute=refresh_account_interval_minute,
     )
