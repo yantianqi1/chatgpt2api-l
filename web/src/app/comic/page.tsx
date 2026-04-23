@@ -1,12 +1,12 @@
 import { redirect } from "next/navigation";
 
-import PublicImagePageClient from "@/app/public-image-page-client";
+import ComicPageClient from "@/features/comic/comic-page-client";
 import { isStudioVariant } from "@/lib/app-variant";
 
-export default function HomePage() {
+export default function ComicPage() {
   if (!isStudioVariant()) {
     redirect("/accounts");
   }
 
-  return <PublicImagePageClient />;
+  return <ComicPageClient />;
 }

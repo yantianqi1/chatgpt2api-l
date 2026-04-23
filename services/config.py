@@ -32,6 +32,7 @@ class AppSettings:
     public_panel_file: Path
     public_base_url: str
     generated_images_dir: Path
+    comic_projects_dir: Path
     refresh_account_interval_minute: int
 
 
@@ -223,6 +224,7 @@ def _load_settings() -> AppSettings:
         public_panel_file=DATA_DIR / "public_panel.json",
         public_base_url=public_base_url,
         generated_images_dir=generated_images_dir,
+        comic_projects_dir=DATA_DIR / "comic-projects",
         refresh_account_interval_minute=refresh_account_interval_minute,
     )
 
