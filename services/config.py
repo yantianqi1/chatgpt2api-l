@@ -13,11 +13,11 @@ CONFIG_FILE = BASE_DIR / "config.json"
 
 IMAGE_DEFAULT_MODEL = "gpt-image-2"
 IMAGE_MAX_COUNT_PER_REQUEST = 4
-IMAGE_MAX_CONCURRENT_JOBS = 4
 IMAGE_AUTO_RETRY_TIMES = 1
+IMAGE_REQUEST_TIMEOUT_SECONDS = 90
 IMAGE_COUNT_LIMIT = 10
-IMAGE_CONCURRENT_LIMIT = 16
 IMAGE_RETRY_LIMIT = 3
+IMAGE_TIMEOUT_LIMIT = 600
 IMAGE_MODEL_VALUES = {"gpt-image-1", "gpt-image-2"}
 _CONFIG_LOCK = Lock()
 
@@ -38,8 +38,8 @@ class AppSettings:
 class ImageSettings:
     default_model: str
     max_count_per_request: int
-    max_concurrent_jobs: int
     auto_retry_times: int
+    request_timeout_seconds: int
 
 
 def _load_dotenv() -> None:
@@ -132,17 +132,17 @@ def get_image_settings() -> ImageSettings:
             minimum=1,
             maximum=IMAGE_COUNT_LIMIT,
         ),
-        max_concurrent_jobs=_normalize_int(
-            raw_config.get("image_max_concurrent_jobs"),
-            default=IMAGE_MAX_CONCURRENT_JOBS,
-            minimum=1,
-            maximum=IMAGE_CONCURRENT_LIMIT,
-        ),
         auto_retry_times=_normalize_int(
             raw_config.get("image_auto_retry_times"),
             default=IMAGE_AUTO_RETRY_TIMES,
             minimum=0,
             maximum=IMAGE_RETRY_LIMIT,
+        ),
+        request_timeout_seconds=_normalize_int(
+            raw_config.get("image_request_timeout_seconds"),
+            default=IMAGE_REQUEST_TIMEOUT_SECONDS,
+            minimum=0,
+            maximum=IMAGE_TIMEOUT_LIMIT,
         ),
     )
 
@@ -159,13 +159,6 @@ def update_image_settings(updates: dict[str, object]) -> ImageSettings:
                 minimum=1,
                 maximum=IMAGE_COUNT_LIMIT,
             )
-        if "max_concurrent_jobs" in updates:
-            raw_config["image_max_concurrent_jobs"] = _normalize_int(
-                updates.get("max_concurrent_jobs"),
-                default=IMAGE_MAX_CONCURRENT_JOBS,
-                minimum=1,
-                maximum=IMAGE_CONCURRENT_LIMIT,
-            )
         if "auto_retry_times" in updates:
             raw_config["image_auto_retry_times"] = _normalize_int(
                 updates.get("auto_retry_times"),
@@ -173,6 +166,14 @@ def update_image_settings(updates: dict[str, object]) -> ImageSettings:
                 minimum=0,
                 maximum=IMAGE_RETRY_LIMIT,
             )
+        if "request_timeout_seconds" in updates:
+            raw_config["image_request_timeout_seconds"] = _normalize_int(
+                updates.get("request_timeout_seconds"),
+                default=IMAGE_REQUEST_TIMEOUT_SECONDS,
+                minimum=0,
+                maximum=IMAGE_TIMEOUT_LIMIT,
+            )
+        raw_config.pop("image_max_concurrent_jobs", None)
         _write_raw_config(raw_config)
     return get_image_settings()
 

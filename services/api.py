@@ -16,16 +16,16 @@ from services.account_service import account_service
 from services.api_public_panel import register_public_panel_routes
 from services.chatgpt_service import ChatGPTService
 from services.config import (
-    IMAGE_CONCURRENT_LIMIT,
     IMAGE_COUNT_LIMIT,
     IMAGE_RETRY_LIMIT,
+    IMAGE_TIMEOUT_LIMIT,
     config,
     get_image_settings,
     update_image_settings,
 )
 from services.cpa_service import cpa_config, cpa_import_service, list_remote_files
-from services.image_workflow_service import ImageJobLimiter, ImageWorkflowService
-from services.image_service import ImageGenerationError
+from services.image_errors import ImageGenerationError, image_generation_status_code
+from services.image_workflow_service import ImageWorkflowService
 from services.public_panel_service import PublicPanelService
 from services.streaming import iter_chat_completion_sse, iter_response_sse
 from services.utils import parse_image_response_format
@@ -54,8 +54,8 @@ class ImageGenerationRequest(BaseModel):
 class ImageSettingsUpdateRequest(BaseModel):
     default_model: str | None = None
     max_count_per_request: int | None = Field(default=None, ge=1, le=IMAGE_COUNT_LIMIT)
-    max_concurrent_jobs: int | None = Field(default=None, ge=1, le=IMAGE_CONCURRENT_LIMIT)
     auto_retry_times: int | None = Field(default=None, ge=0, le=IMAGE_RETRY_LIMIT)
+    request_timeout_seconds: int | None = Field(default=None, ge=0, le=IMAGE_TIMEOUT_LIMIT)
 
 
 class AccountCreateRequest(BaseModel):
@@ -142,8 +142,8 @@ def serialize_image_settings() -> dict[str, object]:
     return {
         "default_model": settings.default_model,
         "max_count_per_request": settings.max_count_per_request,
-        "max_concurrent_jobs": settings.max_concurrent_jobs,
         "auto_retry_times": settings.auto_retry_times,
+        "request_timeout_seconds": settings.request_timeout_seconds,
     }
 
 
@@ -229,7 +229,6 @@ def create_app() -> FastAPI:
     image_workflow_service = ImageWorkflowService(
         quota_gateway=public_panel_service,
         image_backend=chatgpt_service,
-        public_image_limiter=ImageJobLimiter(),
     )
     app_version = get_app_version()
 
@@ -366,7 +365,7 @@ def create_app() -> FastAPI:
                 response_format,
             )
         except ImageGenerationError as exc:
-            raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
+            raise HTTPException(status_code=image_generation_status_code(exc), detail={"error": str(exc)}) from exc
 
     @router.post("/v1/images/edits")
     async def edit_images(
@@ -401,7 +400,7 @@ def create_app() -> FastAPI:
                 normalized_response_format,
             )
         except ImageGenerationError as exc:
-            raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
+            raise HTTPException(status_code=image_generation_status_code(exc), detail={"error": str(exc)}) from exc
 
     @router.post("/v1/chat/completions")
     async def create_chat_completion(body: ChatCompletionRequest, authorization: str | None = Header(default=None)):

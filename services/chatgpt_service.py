@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import time
 from typing import Callable, Iterable
 
 from fastapi import HTTPException
 
 from services.account_service import AccountService
 from services.config import get_image_settings
-from services.image_service import ImageGenerationError, edit_image_result, generate_image_result, is_token_invalid_error
+from services.image_errors import (
+    IMAGE_REQUEST_TIMEOUT_MESSAGE,
+    ImageGenerationError,
+    ImageGenerationTimeoutError,
+    image_generation_status_code,
+)
+from services.image_service import edit_image_result, generate_image_result, is_token_invalid_error
 from services.text_service import TextGenerationError, generate_text_result
 from services.utils import (
     build_chat_image_completion,
@@ -46,6 +53,16 @@ def _extract_response_image(input_value: object) -> tuple[bytes, str] | None:
     return None
 
 
+def _build_image_request_deadline() -> float | None:
+    timeout_seconds = int(getattr(get_image_settings(), "request_timeout_seconds", 0) or 0)
+    return None if timeout_seconds <= 0 else time.monotonic() + timeout_seconds
+
+
+def _ensure_image_request_not_expired(deadline: float | None) -> None:
+    if deadline is not None and time.monotonic() >= deadline:
+        raise ImageGenerationTimeoutError(IMAGE_REQUEST_TIMEOUT_MESSAGE)
+
+
 class ChatGPTService:
     def __init__(self, account_service: AccountService):
         self.account_service = account_service
@@ -57,12 +74,14 @@ class ChatGPTService:
         index: int,
         total: int,
         operation: Callable[[str], dict[str, object]],
+        deadline: float | None,
         extra_log: str = "",
     ) -> dict[str, object] | None:
         retry_limit = get_image_settings().auto_retry_times + 1
         failed_attempts = 0
 
         while True:
+            _ensure_image_request_not_expired(deadline)
             try:
                 request_token = self.account_service.get_available_access_token()
             except RuntimeError as exc:
@@ -89,6 +108,8 @@ class ChatGPTService:
                     self.account_service.remove_token(request_token)
                     print(f"[{label}] remove invalid token={request_token[:12]}...")
                     continue
+                if isinstance(exc, ImageGenerationTimeoutError):
+                    raise
                 failed_attempts += 1
                 if failed_attempts >= retry_limit:
                     return None
@@ -105,14 +126,26 @@ class ChatGPTService:
     def generate_with_pool(self, prompt: str, model: str, n: int, response_format: str = "url"):
         created = None
         image_items: list[dict[str, object]] = []
+        deadline = _build_image_request_deadline()
 
         for index in range(1, n + 1):
+            if deadline is None:
+                operation = lambda request_token: generate_image_result(request_token, prompt, model, response_format)
+            else:
+                operation = lambda request_token: generate_image_result(
+                    request_token,
+                    prompt,
+                    model,
+                    response_format,
+                    deadline=deadline,
+                )
             result = self._run_image_task(
                 label="image-generate",
                 model=model,
                 index=index,
                 total=n,
-                operation=lambda request_token: generate_image_result(request_token, prompt, model, response_format),
+                operation=operation,
+                deadline=deadline,
             )
             if result is None:
                 continue
@@ -139,22 +172,35 @@ class ChatGPTService:
         created = None
         image_items: list[dict[str, object]] = []
         normalized_images = list(images)
+        deadline = _build_image_request_deadline()
         if not normalized_images:
             raise ImageGenerationError("image is required")
 
         for index in range(1, n + 1):
-            result = self._run_image_task(
-                label="image-edit",
-                model=model,
-                index=index,
-                total=n,
-                operation=lambda request_token: edit_image_result(
+            if deadline is None:
+                operation = lambda request_token: edit_image_result(
                     request_token,
                     prompt,
                     normalized_images,
                     model,
                     response_format,
-                ),
+                )
+            else:
+                operation = lambda request_token: edit_image_result(
+                    request_token,
+                    prompt,
+                    normalized_images,
+                    model,
+                    response_format,
+                    deadline=deadline,
+                )
+            result = self._run_image_task(
+                label="image-edit",
+                model=model,
+                index=index,
+                total=n,
+                operation=operation,
+                deadline=deadline,
                 extra_log=f" images={len(normalized_images)}",
             )
             if result is None:
@@ -199,7 +245,7 @@ class ChatGPTService:
             else:
                 image_result = self.generate_with_pool(prompt, model, n, response_format)
         except ImageGenerationError as exc:
-            raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
+            raise HTTPException(status_code=image_generation_status_code(exc), detail={"error": str(exc)}) from exc
 
         return build_chat_image_completion(model, prompt, image_result)
 
@@ -279,7 +325,7 @@ class ChatGPTService:
             else:
                 image_result = self.generate_with_pool(prompt, default_image_model, 1, response_format)
         except ImageGenerationError as exc:
-            raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
+            raise HTTPException(status_code=image_generation_status_code(exc), detail={"error": str(exc)}) from exc
 
         image_items = image_result.get("data") if isinstance(image_result.get("data"), list) else []
         output = []

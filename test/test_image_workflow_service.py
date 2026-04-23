@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
-
 import pytest
 
 from services.image_workflow_service import ImageWorkflowService
@@ -33,16 +31,6 @@ class FakeImageBackend:
         if self.error is not None:
             raise self.error
         return self.result
-
-
-class FakeLimiter:
-    def __init__(self) -> None:
-        self.acquire_count = 0
-
-    @contextmanager
-    def acquire(self):
-        self.acquire_count += 1
-        yield
 
 
 def test_public_generation_commits_reserved_quota_on_success() -> None:
@@ -82,33 +70,3 @@ def test_admin_generation_skips_public_quota() -> None:
     assert quota.reserved == []
     assert quota.committed == []
     assert quota.released == []
-
-
-def test_public_generation_uses_public_concurrency_limiter() -> None:
-    quota = FakeQuotaGateway()
-    backend = FakeImageBackend()
-    limiter = FakeLimiter()
-    service = ImageWorkflowService(
-        quota_gateway=quota,
-        image_backend=backend,
-        public_image_limiter=limiter,
-    )
-
-    service.generate_public(prompt="cat", model="gpt-image-1", n=1, response_format="url")
-
-    assert limiter.acquire_count == 1
-
-
-def test_admin_generation_bypasses_public_concurrency_limiter() -> None:
-    quota = FakeQuotaGateway()
-    backend = FakeImageBackend()
-    limiter = FakeLimiter()
-    service = ImageWorkflowService(
-        quota_gateway=quota,
-        image_backend=backend,
-        public_image_limiter=limiter,
-    )
-
-    service.generate_admin(prompt="cat", model="gpt-image-1", n=1, response_format="url")
-
-    assert limiter.acquire_count == 0

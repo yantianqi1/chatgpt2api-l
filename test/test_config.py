@@ -77,27 +77,27 @@ class ConfigLoadingTests(unittest.TestCase):
                 settings = module.get_image_settings()
                 self.assertEqual(settings.default_model, "gpt-image-2")
                 self.assertEqual(settings.max_count_per_request, 4)
-                self.assertEqual(settings.max_concurrent_jobs, 4)
                 self.assertEqual(settings.auto_retry_times, 1)
+                self.assertEqual(settings.request_timeout_seconds, 90)
 
                 updated = module.update_image_settings(
                     {
                         "default_model": "gpt-image-1",
                         "max_count_per_request": 6,
-                        "max_concurrent_jobs": 2,
                         "auto_retry_times": 3,
+                        "request_timeout_seconds": 45,
                     }
                 )
                 self.assertEqual(updated.default_model, "gpt-image-1")
                 self.assertEqual(updated.max_count_per_request, 6)
-                self.assertEqual(updated.max_concurrent_jobs, 2)
                 self.assertEqual(updated.auto_retry_times, 3)
+                self.assertEqual(updated.request_timeout_seconds, 45)
 
                 persisted = json.loads(config_file.read_text(encoding="utf-8"))
                 self.assertEqual(persisted["image_default_model"], "gpt-image-1")
                 self.assertEqual(persisted["image_max_count_per_request"], 6)
-                self.assertEqual(persisted["image_max_concurrent_jobs"], 2)
                 self.assertEqual(persisted["image_auto_retry_times"], 3)
+                self.assertEqual(persisted["image_request_timeout_seconds"], 45)
             finally:
                 module.BASE_DIR = old_base_dir
                 module.DATA_DIR = old_data_dir

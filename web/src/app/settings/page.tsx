@@ -57,6 +57,7 @@ const DEFAULT_IMAGE_SETTINGS_DRAFT: ImageRuntimeSettingsDraft = {
   defaultModel: "gpt-image-2",
   maxCountPerRequest: "4",
   autoRetryTimes: "1",
+  requestTimeoutSeconds: "90",
 };
 
 function normalizeFiles(items: CPARemoteFile[]) {
@@ -114,6 +115,7 @@ export default function SettingsPage() {
         defaultModel: settings.default_model,
         maxCountPerRequest: String(settings.max_count_per_request),
         autoRetryTimes: String(settings.auto_retry_times),
+        requestTimeoutSeconds: String(settings.request_timeout_seconds),
       });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "加载图片设置失败");
@@ -330,11 +332,13 @@ export default function SettingsPage() {
         default_model: imageSettingsDraft.defaultModel,
         max_count_per_request: Number(imageSettingsDraft.maxCountPerRequest),
         auto_retry_times: Number(imageSettingsDraft.autoRetryTimes),
+        request_timeout_seconds: Number(imageSettingsDraft.requestTimeoutSeconds),
       });
       setImageSettingsDraft({
         defaultModel: settings.default_model,
         maxCountPerRequest: String(settings.max_count_per_request),
         autoRetryTimes: String(settings.auto_retry_times),
+        requestTimeoutSeconds: String(settings.request_timeout_seconds),
       });
       toast.success("图片设置已保存");
     } catch (error) {

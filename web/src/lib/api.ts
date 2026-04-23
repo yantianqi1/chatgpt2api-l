@@ -6,8 +6,8 @@ export type ImageModel = "gpt-image-1" | "gpt-image-2";
 export type ImageRuntimeSettings = {
   default_model: ImageModel;
   max_count_per_request: number;
-  max_concurrent_jobs: number;
   auto_retry_times: number;
+  request_timeout_seconds: number;
 };
 export type GeneratedImageData = {
   url?: string;

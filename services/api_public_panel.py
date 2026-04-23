@@ -6,7 +6,7 @@ from fastapi import APIRouter, Body, File, Form, Header, HTTPException, UploadFi
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from services.image_service import ImageGenerationError
+from services.image_errors import ImageGenerationError, image_generation_status_code
 
 
 class PublicPanelConfigUpdateRequest(BaseModel):
@@ -79,7 +79,7 @@ def register_public_panel_routes(
                 parsed.response_format,
             )
         except ImageGenerationError as exc:
-            raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
+            raise HTTPException(status_code=image_generation_status_code(exc), detail={"error": str(exc)}) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=403, detail={"error": str(exc)}) from exc
 
@@ -102,6 +102,6 @@ def register_public_panel_routes(
         try:
             return await run_in_threadpool(image_workflow_service.edit_public, prompt, images, model, n, response_format)
         except ImageGenerationError as exc:
-            raise HTTPException(status_code=502, detail={"error": str(exc)}) from exc
+            raise HTTPException(status_code=image_generation_status_code(exc), detail={"error": str(exc)}) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=403, detail={"error": str(exc)}) from exc
