@@ -75,3 +75,35 @@ def test_redeem_activation_code_cannot_be_reused(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="activation code already redeemed"):
         auth_service.redeem_activation_code(code=code, user_id=user["id"])
+
+
+@pytest.mark.parametrize(
+    ("user_id", "error_type", "message"),
+    [
+        ("", TypeError, "user_id must be a positive integer string"),
+        ("abc", ValueError, "user_id must be a positive integer string"),
+        ("0", ValueError, "user_id must be greater than 0"),
+        (True, TypeError, "user_id must be a positive integer string"),
+    ],
+)
+def test_redeem_activation_code_rejects_invalid_user_id(
+    tmp_path: Path,
+    user_id: object,
+    error_type: type[Exception],
+    message: str,
+) -> None:
+    store = PublicBillingStore(tmp_path / "public_activation_codes.db")
+    auth_service = PublicAuthService(store)
+    code = store.create_activation_codes(count=1, amount_cents=550, batch_note="april")[0]["code"]
+
+    with pytest.raises(error_type, match=message):
+        auth_service.redeem_activation_code(code=code, user_id=user_id)  # type: ignore[arg-type]
+
+
+def test_redeem_activation_code_rejects_missing_code(tmp_path: Path) -> None:
+    store = PublicBillingStore(tmp_path / "public_activation_codes.db")
+    auth_service = PublicAuthService(store)
+    user = store.create_user(username="demo", password_hash="hash", signup_bonus_cents=0)
+
+    with pytest.raises(ValueError, match="activation code not found"):
+        auth_service.redeem_activation_code(code="A" * 32, user_id=user["id"])

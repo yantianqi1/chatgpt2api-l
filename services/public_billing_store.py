@@ -103,11 +103,21 @@ class PublicBillingStore:
             for _ in range(code_count):
                 code = self._generate_activation_code(conn)
                 cursor = conn.execute(
-                    "INSERT INTO activation_codes (code, amount_cents, batch_note, status, created_at) VALUES (?, ?, ?, 'unused', ?)",
+                    """
+                    INSERT INTO activation_codes (
+                        code, amount_cents, batch_note, status, created_at
+                    )
+                    VALUES (?, ?, ?, 'unused', ?)
+                    """,
                     (code, prize_cents, batch_note, created_at),
                 )
                 row = conn.execute(
-                    "SELECT id, code, amount_cents, batch_note, status, created_at, redeemed_by_user_id, redeemed_at FROM activation_codes WHERE id = ?",
+                    """
+                    SELECT id, code, amount_cents, batch_note, status, created_at,
+                           redeemed_by_user_id, redeemed_at
+                    FROM activation_codes
+                    WHERE id = ?
+                    """,
                     (cursor.lastrowid,),
                 ).fetchone()
                 rows.append(self._format_activation_code(row))
@@ -116,34 +126,72 @@ class PublicBillingStore:
     def redeem_activation_code(self, *, code: str, user_id: str) -> dict[str, object]:
         if isinstance(code, bool) or not isinstance(code, str) or not code:
             raise TypeError("code must be a non-empty str")
-        user_db_id = int(user_id)
+        user_db_id = self._require_user_id(user_id)
         redeemed_at = self._now()
         with self._lock, self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             code_row = conn.execute(
-                "SELECT id, code, amount_cents, batch_note, status, created_at FROM activation_codes WHERE code = ?",
+                """
+                SELECT id, code, amount_cents, batch_note, status, created_at
+                FROM activation_codes
+                WHERE code = ?
+                """,
                 (code,),
             ).fetchone()
             if code_row is None:
                 raise ValueError("activation code not found")
             if str(code_row["status"]) != "unused":
                 raise ValueError("activation code already redeemed")
-            user_row = conn.execute("SELECT id, balance_cents FROM users WHERE id = ?", (user_db_id,)).fetchone()
+            user_row = conn.execute(
+                "SELECT id, balance_cents FROM users WHERE id = ?",
+                (user_db_id,),
+            ).fetchone()
             if user_row is None:
                 raise ValueError("user not found")
             amount_cents = int(code_row["amount_cents"])
             balance_after_cents = int(user_row["balance_cents"]) + amount_cents
-            conn.execute("UPDATE users SET balance_cents = ?, updated_at = ? WHERE id = ?", (balance_after_cents, redeemed_at, user_db_id))
             conn.execute(
-                "UPDATE activation_codes SET status = 'redeemed', redeemed_by_user_id = ?, redeemed_at = ? WHERE id = ?",
+                """
+                UPDATE users
+                SET balance_cents = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (balance_after_cents, redeemed_at, user_db_id),
+            )
+            conn.execute(
+                """
+                UPDATE activation_codes
+                SET status = 'redeemed', redeemed_by_user_id = ?, redeemed_at = ?
+                WHERE id = ?
+                """,
                 (user_db_id, redeemed_at, int(code_row["id"])),
             )
             conn.execute(
-                "INSERT INTO quota_ledger (scope, user_id, change_cents, balance_after_cents, reason, reference_type, reference_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                ("user", user_db_id, amount_cents, balance_after_cents, "activation_code_redeem", "activation_code", code, redeemed_at),
+                """
+                INSERT INTO quota_ledger (
+                    scope, user_id, change_cents, balance_after_cents, reason,
+                    reference_type, reference_id, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "user",
+                    user_db_id,
+                    amount_cents,
+                    balance_after_cents,
+                    "activation_code_redeem",
+                    "activation_code",
+                    code,
+                    redeemed_at,
+                ),
             )
             row = conn.execute(
-                "SELECT id, code, amount_cents, batch_note, status, created_at, redeemed_by_user_id, redeemed_at FROM activation_codes WHERE id = ?",
+                """
+                SELECT id, code, amount_cents, batch_note, status, created_at,
+                       redeemed_by_user_id, redeemed_at
+                FROM activation_codes
+                WHERE id = ?
+                """,
                 (int(code_row["id"]),),
             ).fetchone()
         return self._format_activation_code(row)
@@ -192,6 +240,25 @@ class PublicBillingStore:
         if value <= 0:
             raise ValueError(f"{name} must be greater than 0")
         return value
+
+    @staticmethod
+    def _require_user_id(value: object) -> int:
+        if isinstance(value, bool):
+            raise TypeError("user_id must be a positive integer string")
+        if isinstance(value, int):
+            if value <= 0:
+                raise ValueError("user_id must be greater than 0")
+            return value
+        if not isinstance(value, str):
+            raise TypeError("user_id must be a positive integer string")
+        if not value:
+            raise TypeError("user_id must be a positive integer string")
+        if not value.isdigit():
+            raise ValueError("user_id must be a positive integer string")
+        user_id = int(value)
+        if user_id <= 0:
+            raise ValueError("user_id must be greater than 0")
+        return user_id
 
     def _generate_activation_code(self, conn: sqlite3.Connection) -> str:
         while True:
