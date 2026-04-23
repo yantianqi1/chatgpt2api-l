@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from pathlib import Path
+import subprocess
+import sys
 
 from fastapi.testclient import TestClient
 
@@ -23,6 +25,34 @@ def with_public_billing_file(path: Path):
 
 def admin_headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {config.auth_key}"}
+
+
+def test_create_app_import_does_not_require_curl_cffi_at_import_time() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    code = """
+import builtins
+
+real_import = builtins.__import__
+
+def blocked_import(name, globals=None, locals=None, fromlist=(), level=0):
+    if name.startswith("curl_cffi"):
+        raise ModuleNotFoundError("No module named 'curl_cffi'")
+    return real_import(name, globals, locals, fromlist, level)
+
+builtins.__import__ = blocked_import
+
+from services.api import create_app
+
+create_app()
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=project_root,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_admin_can_list_model_pricing(tmp_path: Path) -> None:
@@ -207,6 +237,24 @@ def test_admin_activation_codes_can_filter_by_batch_note(tmp_path: Path) -> None
     assert {item["batch_note"] for item in response.json()["items"]} == {"spring"}
 
 
+def test_admin_activation_codes_can_search_by_partial_batch_note(tmp_path: Path) -> None:
+    db_file = tmp_path / "public_billing.db"
+    store = PublicBillingStore(db_file)
+    store.create_activation_codes(count=1, amount_cents=550, batch_note="spring")
+    store.create_activation_codes(count=1, amount_cents=550, batch_note="summer")
+
+    with with_public_billing_file(db_file):
+        client = TestClient(create_app(), base_url="https://testserver")
+        response = client.get(
+            "/api/admin/billing/activation-codes",
+            headers=admin_headers(),
+            params={"batch_note": "spr"},
+        )
+
+    assert response.status_code == 200
+    assert {item["batch_note"] for item in response.json()["items"]} == {"spring"}
+
+
 def test_admin_activation_codes_can_filter_empty_batch_note(tmp_path: Path) -> None:
     db_file = tmp_path / "public_billing.db"
     store = PublicBillingStore(db_file)
@@ -247,6 +295,29 @@ def test_admin_activation_codes_can_filter_by_redeemed_username(tmp_path: Path) 
 
     assert response.status_code == 200
     assert {item["redeemed_by_user_id"] for item in response.json()["items"]} == {alice["id"]}
+
+
+def test_admin_activation_codes_can_search_by_partial_redeemed_username(tmp_path: Path) -> None:
+    db_file = tmp_path / "public_billing.db"
+    store = PublicBillingStore(db_file)
+    auth_service = PublicAuthService(store)
+    demo = store.create_user(username="demo", password_hash="hash", signup_bonus_cents=0)
+    other = store.create_user(username="other", password_hash="hash", signup_bonus_cents=0)
+    demo_code = store.create_activation_codes(count=1, amount_cents=550, batch_note="spring")[0]["code"]
+    other_code = store.create_activation_codes(count=1, amount_cents=550, batch_note="spring")[0]["code"]
+    auth_service.redeem_activation_code(code=demo_code, user_id=demo["id"])
+    auth_service.redeem_activation_code(code=other_code, user_id=other["id"])
+
+    with with_public_billing_file(db_file):
+        client = TestClient(create_app(), base_url="https://testserver")
+        response = client.get(
+            "/api/admin/billing/activation-codes",
+            headers=admin_headers(),
+            params={"redeemed_username": "de"},
+        )
+
+    assert response.status_code == 200
+    assert {item["redeemed_by_user_id"] for item in response.json()["items"]} == {demo["id"]}
 
 
 def test_admin_store_helpers_cover_model_pricing_and_activation_codes(tmp_path: Path) -> None:

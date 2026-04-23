@@ -118,8 +118,16 @@ class PublicBillingStore:
             params: list[object] = []
             if redeemed_username is not None:
                 query.append("LEFT JOIN users AS u ON u.id = ac.redeemed_by_user_id")
-            conditions = [clause for clause, value in (("ac.status = ?", status), ("ac.batch_note = ?", batch_note), ("u.username = ?", redeemed_username)) if value is not None]
-            params.extend([value for value in (status, batch_note, redeemed_username) if value is not None])
+            conditions: list[str] = []
+            if status is not None:
+                conditions.append("ac.status = ?")
+                params.append(status)
+            if batch_note is not None:
+                conditions.append("ac.batch_note = ?" if batch_note == "" else "ac.batch_note LIKE ?")
+                params.append(batch_note if batch_note == "" else f"%{batch_note}%")
+            if redeemed_username is not None:
+                conditions.append("u.username LIKE ?")
+                params.append(f"%{redeemed_username}%")
             if conditions:
                 query.append("WHERE " + " AND ".join(conditions))
             query.append("ORDER BY ac.id DESC")

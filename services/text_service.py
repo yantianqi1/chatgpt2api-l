@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import TYPE_CHECKING
 
 from services.account_service import account_service
 from services.image_service import (
@@ -13,7 +14,8 @@ from services.image_service import (
     _pow_config,
 )
 
-from curl_cffi.requests import Session
+if TYPE_CHECKING:
+    from curl_cffi.requests import Session
 
 
 class TextGenerationError(Exception):

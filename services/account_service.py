@@ -9,8 +9,6 @@ from threading import Lock
 from typing import Any
 from datetime import datetime
 
-from curl_cffi.requests import Session
-
 from services.config import config
 
 
@@ -453,7 +451,7 @@ class AccountService:
 
         headers, impersonate = self._build_remote_headers(access_token)
         print(f"[account-refresh] start {access_token[:12]}...")
-        session = Session(impersonate=impersonate, verify=True)
+        session = self._create_remote_session(impersonate=impersonate)
         session.headers.update(headers)
         try:
             with ThreadPoolExecutor(max_workers=2) as executor:
@@ -516,6 +514,12 @@ class AccountService:
             return result
         finally:
             session.close()
+
+    @staticmethod
+    def _create_remote_session(*, impersonate: str):
+        from curl_cffi.requests import Session
+
+        return Session(impersonate=impersonate, verify=True)
 
     def refresh_accounts(self, access_tokens: list[str]) -> dict[str, Any]:
         cleaned_tokens = self._clean_tokens(access_tokens)

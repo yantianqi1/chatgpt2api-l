@@ -10,8 +10,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 
-from curl_cffi.requests import Session
-
 from services.account_service import account_service
 from services.config import DATA_DIR
 
@@ -63,6 +61,12 @@ def _management_headers(secret_key: str) -> dict[str, str]:
         "Authorization": f"Bearer {secret_key}",
         "Accept": "application/json",
     }
+
+
+def _new_management_session():
+    from curl_cffi.requests import Session
+
+    return Session(verify=True)
 
 
 class CPAConfig:
@@ -155,7 +159,7 @@ def list_remote_files(pool: dict) -> list[dict]:
         return []
 
     url = f"{base_url.rstrip('/')}/v0/management/auth-files"
-    session = Session(verify=True)
+    session = _new_management_session()
     try:
         response = session.get(url, headers=_management_headers(secret_key), timeout=30)
         if not response.ok:
@@ -188,7 +192,7 @@ def fetch_remote_access_token(pool: dict, file_name: str) -> tuple[str | None, s
         return None, "invalid request"
 
     url = f"{base_url.rstrip('/')}/v0/management/auth-files/download"
-    session = Session(verify=True)
+    session = _new_management_session()
     try:
         response = session.get(url, headers=_management_headers(secret_key), params={"name": file_name}, timeout=30)
         if not response.ok:

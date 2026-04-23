@@ -7,12 +7,13 @@ import random
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Optional
-
-from curl_cffi.requests import Session
+from typing import Optional, TYPE_CHECKING
 
 from services.account_service import account_service
 from services import proof_of_work
+
+if TYPE_CHECKING:
+    from curl_cffi.requests import Session
 
 
 BASE_URL = "https://chatgpt.com"
@@ -96,6 +97,8 @@ def _build_fp(access_token: str) -> dict:
 
 def _new_session(access_token: str) -> tuple[Session, dict]:
     fp = _build_fp(access_token)
+    from curl_cffi.requests import Session
+
     session = Session(
         impersonate=fp.get("impersonate") or "edge101",
         verify=True,
