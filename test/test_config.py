@@ -1,7 +1,19 @@
 import json
+import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
+
+if "curl_cffi.requests" not in sys.modules:
+    curl_cffi_module = types.ModuleType("curl_cffi")
+    requests_module = types.ModuleType("curl_cffi.requests")
+    requests_module.Session = object
+    curl_cffi_module.requests = requests_module
+    sys.modules["curl_cffi"] = curl_cffi_module
+    sys.modules["curl_cffi.requests"] = requests_module
+
+from services.image_service import LONG_REQUEST_TIMEOUT_SECONDS
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -78,7 +90,7 @@ class ConfigLoadingTests(unittest.TestCase):
                 self.assertEqual(settings.default_model, "gpt-image-2")
                 self.assertEqual(settings.max_count_per_request, 4)
                 self.assertEqual(settings.auto_retry_times, 1)
-                self.assertEqual(settings.request_timeout_seconds, 90)
+                self.assertEqual(settings.request_timeout_seconds, LONG_REQUEST_TIMEOUT_SECONDS)
 
                 updated = module.update_image_settings(
                     {
