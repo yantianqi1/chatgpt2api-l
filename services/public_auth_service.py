@@ -69,6 +69,8 @@ class PublicAuthService:
             expected = bytes.fromhex(parts[3])
         except ValueError:
             return None
+        if iterations <= 0:
+            return None
         return iterations, salt, expected
 
     @staticmethod

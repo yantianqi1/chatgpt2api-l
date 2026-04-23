@@ -31,6 +31,9 @@ CREATE TABLE IF NOT EXISTS user_sessions (
     FOREIGN KEY(user_id) REFERENCES users(id)
 );
 
+CREATE INDEX IF NOT EXISTS idx_user_sessions_token_hash
+ON user_sessions (token_hash);
+
 CREATE TABLE IF NOT EXISTS activation_codes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     code TEXT NOT NULL UNIQUE,
@@ -211,7 +214,6 @@ class PublicBillingStore:
         return {
             "id": str(row["id"]),
             "user_id": str(row["user_id"]),
-            "token_hash": str(row["token_hash"]),
             "expires_at": str(row["expires_at"]),
             "created_at": str(row["created_at"]),
             "last_seen_at": str(row["last_seen_at"]),

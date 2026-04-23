@@ -101,3 +101,13 @@ def test_store_rejects_negative_money_columns_at_db_level(tmp_path: Path) -> Non
                 VALUES ('gpt-image-x', -1, 1, 'now')
                 """
             )
+
+
+def test_store_indexes_session_token_hash(tmp_path: Path) -> None:
+    db_file = tmp_path / "public_billing.db"
+    PublicBillingStore(db_file)
+
+    with sqlite3.connect(db_file) as conn:
+        index_rows = conn.execute("PRAGMA index_list('user_sessions')").fetchall()
+
+    assert any("token_hash" in str(index_row[1]) for index_row in index_rows)
