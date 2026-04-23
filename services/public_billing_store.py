@@ -40,6 +40,13 @@ class PublicBillingStore:
                 return None
         return self.list_model_pricing()
 
+    def get_model_price_cents(self, model: str) -> int:
+        with self._lock, self._connect() as conn:
+            row = conn.execute("SELECT price_cents, enabled FROM model_pricing WHERE model = ?", (model,)).fetchone()
+        if row is None or int(row["enabled"]) != 1:
+            raise RuntimeError("model price is unavailable")
+        return int(row["price_cents"])
+
     def create_user(self, *, username: str, password_hash: str, signup_bonus_cents: int) -> dict[str, str]:
         bonus_cents = self._require_nonnegative_cents(signup_bonus_cents, name="signup_bonus_cents")
         now = self._now()
@@ -61,10 +68,21 @@ class PublicBillingStore:
 
     def get_user_auth_by_username(self, username: str) -> dict[str, str] | None:
         with self._lock, self._connect() as conn:
-            row = conn.execute("SELECT id, username, password_hash, balance_cents, status, created_at, updated_at FROM users WHERE username = ?", (username,)).fetchone()
+            row = conn.execute(
+                "SELECT id, username, password_hash, balance_cents, status, created_at, updated_at FROM users WHERE username = ?",
+                (username,),
+            ).fetchone()
         if row is None:
             return None
-        return {"id": str(row["id"]), "username": str(row["username"]), "password_hash": str(row["password_hash"]), "balance": self._format_money(int(row["balance_cents"])), "status": str(row["status"]), "created_at": str(row["created_at"]), "updated_at": str(row["updated_at"])}
+        return {
+            "id": str(row["id"]),
+            "username": str(row["username"]),
+            "password_hash": str(row["password_hash"]),
+            "balance": self._format_money(int(row["balance_cents"])),
+            "status": str(row["status"]),
+            "created_at": str(row["created_at"]),
+            "updated_at": str(row["updated_at"]),
+        }
 
     def get_user_by_session_token_hash(self, token_hash: str) -> dict[str, str] | None:
         now = self._now()
@@ -74,6 +92,37 @@ class PublicBillingStore:
                 (token_hash, now),
             ).fetchone()
         return self._format_user(row) if row is not None else None
+
+    def get_user_balance_cents(self, user_id: str) -> int:
+        user_db_id = self._require_user_id(user_id)
+        with self._lock, self._connect() as conn:
+            row = conn.execute("SELECT balance_cents FROM users WHERE id = ?", (user_db_id,)).fetchone()
+        if row is None:
+            raise RuntimeError("public user not found")
+        return int(row["balance_cents"])
+
+    def debit_user_balance(self, *, user_id: str, amount_cents: int, model: str, count: int) -> int:
+        debit_cents = self._require_nonnegative_cents(amount_cents, name="amount_cents")
+        user_db_id = self._require_user_id(user_id)
+        now = self._now()
+        with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT balance_cents FROM users WHERE id = ?", (user_db_id,)).fetchone()
+            if row is None:
+                raise RuntimeError("public user not found")
+            balance_cents = int(row["balance_cents"])
+            if balance_cents < debit_cents:
+                raise RuntimeError("public user balance is insufficient")
+            next_balance = balance_cents - debit_cents
+            conn.execute(
+                "UPDATE users SET balance_cents = ?, updated_at = ? WHERE id = ?",
+                (next_balance, now, user_db_id),
+            )
+            conn.execute(
+                "INSERT INTO quota_ledger (scope, user_id, change_cents, balance_after_cents, reason, reference_type, reference_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                ("user", user_db_id, -debit_cents, next_balance, "public_image_charge", "image_model", f"{model}:{count}", now),
+            )
+        return next_balance
 
     def delete_session_by_token_hash(self, token_hash: str) -> bool:
         with self._lock, self._connect() as conn:
@@ -101,8 +150,14 @@ class PublicBillingStore:
             conn.execute("BEGIN IMMEDIATE")
             for _ in range(code_count):
                 code = self._generate_activation_code(conn)
-                cursor = conn.execute("INSERT INTO activation_codes (code, amount_cents, batch_note, status, created_at) VALUES (?, ?, ?, 'unused', ?)", (code, prize_cents, batch_note, created_at))
-                row = conn.execute("SELECT id, code, amount_cents, batch_note, status, created_at, redeemed_by_user_id, redeemed_at FROM activation_codes WHERE id = ?", (cursor.lastrowid,)).fetchone()
+                cursor = conn.execute(
+                    "INSERT INTO activation_codes (code, amount_cents, batch_note, status, created_at) VALUES (?, ?, ?, 'unused', ?)",
+                    (code, prize_cents, batch_note, created_at),
+                )
+                row = conn.execute(
+                    "SELECT id, code, amount_cents, batch_note, status, created_at, redeemed_by_user_id, redeemed_at FROM activation_codes WHERE id = ?",
+                    (cursor.lastrowid,),
+                ).fetchone()
                 rows.append(self._format_activation_code(row))
         return rows
 
@@ -114,7 +169,10 @@ class PublicBillingStore:
         redeemed_username: str | None = None,
     ) -> list[dict[str, object]]:
         with self._lock, self._connect() as conn:
-            query = ["SELECT ac.id, ac.code, ac.amount_cents, ac.batch_note, ac.status, ac.created_at, ac.redeemed_by_user_id, ac.redeemed_at", "FROM activation_codes AS ac"]
+            query = [
+                "SELECT ac.id, ac.code, ac.amount_cents, ac.batch_note, ac.status, ac.created_at, ac.redeemed_by_user_id, ac.redeemed_at",
+                "FROM activation_codes AS ac",
+            ]
             params: list[object] = []
             if redeemed_username is not None:
                 query.append("LEFT JOIN users AS u ON u.id = ac.redeemed_by_user_id")
@@ -153,56 +211,25 @@ class PublicBillingStore:
                 raise ValueError("activation code not found")
             if str(code_row["status"]) != "unused":
                 raise ValueError("activation code already redeemed")
-            user_row = conn.execute(
-                "SELECT id, balance_cents FROM users WHERE id = ?",
-                (user_db_id,),
-            ).fetchone()
+            user_row = conn.execute("SELECT id, balance_cents FROM users WHERE id = ?", (user_db_id,)).fetchone()
             if user_row is None:
                 raise ValueError("user not found")
             amount_cents = int(code_row["amount_cents"])
             balance_after_cents = int(user_row["balance_cents"]) + amount_cents
             conn.execute(
-                """
-                UPDATE users
-                SET balance_cents = ?, updated_at = ?
-                WHERE id = ?
-                """,
+                "UPDATE users SET balance_cents = ?, updated_at = ? WHERE id = ?",
                 (balance_after_cents, redeemed_at, user_db_id),
             )
             conn.execute(
-                """
-                UPDATE activation_codes
-                SET status = 'redeemed', redeemed_by_user_id = ?, redeemed_at = ?
-                WHERE id = ?
-                """,
+                "UPDATE activation_codes SET status = 'redeemed', redeemed_by_user_id = ?, redeemed_at = ? WHERE id = ?",
                 (user_db_id, redeemed_at, int(code_row["id"])),
             )
             conn.execute(
-                """
-                INSERT INTO quota_ledger (
-                    scope, user_id, change_cents, balance_after_cents, reason,
-                    reference_type, reference_id, created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    "user",
-                    user_db_id,
-                    amount_cents,
-                    balance_after_cents,
-                    "activation_code_redeem",
-                    "activation_code",
-                    code,
-                    redeemed_at,
-                ),
+                "INSERT INTO quota_ledger (scope, user_id, change_cents, balance_after_cents, reason, reference_type, reference_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                ("user", user_db_id, amount_cents, balance_after_cents, "activation_code_redeem", "activation_code", code, redeemed_at),
             )
             row = conn.execute(
-                """
-                SELECT id, code, amount_cents, batch_note, status, created_at,
-                       redeemed_by_user_id, redeemed_at
-                FROM activation_codes
-                WHERE id = ?
-                """,
+                "SELECT id, code, amount_cents, batch_note, status, created_at, redeemed_by_user_id, redeemed_at FROM activation_codes WHERE id = ?",
                 (int(code_row["id"]),),
             ).fetchone()
         return self._format_activation_code(row)
@@ -218,7 +245,10 @@ class PublicBillingStore:
 
     def _seed_model_pricing(self, conn: sqlite3.Connection) -> None:
         for model, price_cents in MODEL_PRICE_SEEDS:
-            conn.execute("INSERT OR IGNORE INTO model_pricing (model, price_cents, enabled, updated_at) VALUES (?, ?, 1, ?)", (model, price_cents, self._now()))
+            conn.execute(
+                "INSERT OR IGNORE INTO model_pricing (model, price_cents, enabled, updated_at) VALUES (?, ?, 1, ?)",
+                (model, price_cents, self._now()),
+            )
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_file)

@@ -47,7 +47,11 @@ def _extract_response_image(input_value: object) -> tuple[bytes, str] | None:
 class ChatGPTService:
     def __init__(self, account_service: AccountService):
         self.account_service = account_service
-        self.image_workflow_service = ImageWorkflowService(quota_gateway=None, image_backend=self)
+        self.image_workflow_service = ImageWorkflowService(
+            quota_gateway=None,
+            billing_store=None,
+            image_backend=self,
+        )
 
     def generate_with_pool(self, prompt: str, model: str, n: int):
         created = None

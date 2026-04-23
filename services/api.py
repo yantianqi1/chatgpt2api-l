@@ -105,7 +105,11 @@ def create_app() -> FastAPI:
     billing_store = PublicBillingStore(config.public_billing_file)
     auth_service = PublicAuthService(billing_store)
     public_panel_service = PublicPanelService(config.public_panel_file)
-    image_workflow_service = ImageWorkflowService(quota_gateway=public_panel_service, image_backend=chatgpt_service)
+    image_workflow_service = ImageWorkflowService(
+        quota_gateway=public_panel_service,
+        billing_store=billing_store,
+        image_backend=chatgpt_service,
+    )
     app_version = get_app_version()
 
     @asynccontextmanager
@@ -134,6 +138,7 @@ def create_app() -> FastAPI:
         router,
         public_panel_service=public_panel_service,
         image_workflow_service=image_workflow_service,
+        public_auth_service=auth_service,
         image_request_model=ImageGenerationRequest,
         require_auth_key=require_auth_key,
     )
@@ -148,7 +153,6 @@ def create_app() -> FastAPI:
         if asset is not None:
             return FileResponse(asset)
 
-        # Static assets (_next/*) must not fallback to HTML — return 404
         if full_path.strip("/").startswith("_next/"):
             raise HTTPException(status_code=404, detail="Not Found")
 
