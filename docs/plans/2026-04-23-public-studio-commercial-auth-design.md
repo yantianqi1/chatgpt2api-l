@@ -548,6 +548,24 @@
 - 额度不足提示
 - 管理端价格保存与激活码生成
 
+## 当前落地情况（2026-04-23）
+
+本设计对应的 MVP 已在 `feat/public-studio-user-auth` 工作树落地，当前实现与设计对齐点如下：
+
+- 已提供 `POST /api/public-auth/register`、`login`、`logout`、`redeem` 与 `GET /api/public-auth/me`，登录态使用服务端 session cookie
+- 注册成功后固定发放 `1.00` 初始额度，并写入 `signup_bonus` 流水
+- 匿名用户继续扣 `public_panel` 公共额度；登录用户只扣个人余额，额度不足时直接报错，不回退到匿名公共额度
+- 管理端已提供 `/api/admin/billing/model-pricing` 与 `/api/admin/billing/activation-codes` 两组接口，支持模型价格维护、激活码批量生成和按状态/批次/兑换用户名筛选
+- 公开站 `/login` 已改为注册/登录双标签页，首页已展示个人余额与激活码兑换入口
+- 管理端 `/billing` 已落地为独立页面，并只在 `admin` 变体中暴露；`studio` 变体访问该路由会返回 `notFound`
+
+本次 Task 10 验证结果：
+
+- 后端回归：`UV_CACHE_DIR=.uv-cache uv run --with pytest --with httpx python -m pytest test/test_public_billing_store.py test/test_public_money.py test/test_public_auth_service.py test/test_public_auth_api.py test/test_public_activation_codes.py test/test_admin_billing_api.py test/test_image_workflow_service.py test/test_public_panel_api.py test/test_chat_completions_api.py -q`
+- 结果：`81 passed in 1.84s`
+- 前端构建：`npm run build`
+- 结果：`build:admin` 与 `build:studio` 均通过，静态路由包含 `/billing`
+
 ## 不在本次范围
 
 这次不做：
