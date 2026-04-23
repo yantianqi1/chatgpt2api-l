@@ -11,10 +11,13 @@ from fastapi.responses import FileResponse
 
 from services.account_service import account_service
 from services.api_admin import ImageGenerationRequest, register_admin_routes
+from services.api_public_auth import register_public_auth_routes
 from services.api_public_panel import register_public_panel_routes
 from services.chatgpt_service import ChatGPTService
 from services.config import config
 from services.image_workflow_service import ImageWorkflowService
+from services.public_auth_service import PublicAuthService
+from services.public_billing_store import PublicBillingStore
 from services.public_panel_service import PublicPanelService
 from services.version import get_app_version
 
@@ -98,6 +101,8 @@ def should_block_studio_page(requested_path: str) -> bool:
 
 def create_app() -> FastAPI:
     chatgpt_service = ChatGPTService(account_service)
+    billing_store = PublicBillingStore(config.public_billing_file)
+    auth_service = PublicAuthService(billing_store)
     public_panel_service = PublicPanelService(config.public_panel_file)
     image_workflow_service = ImageWorkflowService(quota_gateway=public_panel_service, image_backend=chatgpt_service)
     app_version = get_app_version()
@@ -122,6 +127,7 @@ def create_app() -> FastAPI:
     )
     router = APIRouter()
     register_admin_routes(router, app_version=app_version, chatgpt_service=chatgpt_service, require_auth_key=require_auth_key)
+    register_public_auth_routes(router, auth_service=auth_service, billing_store=billing_store)
     register_public_panel_routes(
         router,
         public_panel_service=public_panel_service,

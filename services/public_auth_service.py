@@ -41,6 +41,17 @@ class PublicAuthService:
         )
         return hmac.compare_digest(candidate, expected)
 
+    def hash_session_token(self, token: str) -> str:
+        return self._hash_token(token)
+
+    def get_user_by_session_token(self, token: str) -> dict[str, str] | None:
+        token_hash = self.hash_session_token(token)
+        return self._billing_store.get_user_by_session_token_hash(token_hash)
+
+    def delete_session_by_token(self, token: str) -> bool:
+        token_hash = self.hash_session_token(token)
+        return self._billing_store.delete_session_by_token_hash(token_hash)
+
     def create_session(self, user_id: str) -> tuple[str, dict[str, object]]:
         token = secrets.token_urlsafe(SESSION_TOKEN_BYTES)
         now = datetime.now(timezone.utc)

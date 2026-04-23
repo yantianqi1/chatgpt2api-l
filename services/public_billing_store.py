@@ -122,6 +122,49 @@ class PublicBillingStore:
         ).fetchone()
         return self._format_user(row)
 
+    def get_user_auth_by_username(self, username: str) -> dict[str, str] | None:
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, username, password_hash, balance_cents, status, created_at, updated_at
+                FROM users
+                WHERE username = ?
+                """,
+                (username,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "id": str(row["id"]),
+            "username": str(row["username"]),
+            "password_hash": str(row["password_hash"]),
+            "balance": self._format_money(int(row["balance_cents"])),
+            "status": str(row["status"]),
+            "created_at": str(row["created_at"]),
+            "updated_at": str(row["updated_at"]),
+        }
+
+    def get_user_by_session_token_hash(self, token_hash: str) -> dict[str, str] | None:
+        now = self._now()
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT u.id, u.username, u.password_hash, u.balance_cents, u.status, u.created_at, u.updated_at
+                FROM user_sessions AS s
+                INNER JOIN users AS u ON u.id = s.user_id
+                WHERE s.token_hash = ? AND s.expires_at > ?
+                ORDER BY s.id DESC
+                LIMIT 1
+                """,
+                (token_hash, now),
+            ).fetchone()
+        return self._format_user(row) if row is not None else None
+
+    def delete_session_by_token_hash(self, token_hash: str) -> bool:
+        with self._lock, self._connect() as conn:
+            cursor = conn.execute("DELETE FROM user_sessions WHERE token_hash = ?", (token_hash,))
+        return cursor.rowcount > 0
+
     def create_session(
         self,
         *,
