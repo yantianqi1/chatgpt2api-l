@@ -24,7 +24,7 @@ from services.config import (
     update_image_settings,
 )
 from services.cpa_service import cpa_config, cpa_import_service, list_remote_files
-from services.image_workflow_service import ImageWorkflowService
+from services.image_workflow_service import ImageJobLimiter, ImageWorkflowService
 from services.image_service import ImageGenerationError
 from services.public_panel_service import PublicPanelService
 from services.streaming import iter_chat_completion_sse, iter_response_sse
@@ -229,6 +229,7 @@ def create_app() -> FastAPI:
     image_workflow_service = ImageWorkflowService(
         quota_gateway=public_panel_service,
         image_backend=chatgpt_service,
+        public_image_limiter=ImageJobLimiter(),
     )
     app_version = get_app_version()
 

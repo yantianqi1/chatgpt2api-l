@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
-from threading import Condition
 from typing import Callable, Iterable
 
 from fastapi import HTTPException
@@ -24,28 +22,6 @@ from services.utils import (
     parse_image_count,
     parse_image_response_format,
 )
-
-
-class ImageJobLimiter:
-    def __init__(self):
-        self._active_jobs = 0
-        self._condition = Condition()
-
-    @contextmanager
-    def acquire(self):
-        with self._condition:
-            while self._active_jobs >= get_image_settings().max_concurrent_jobs:
-                self._condition.wait(timeout=0.2)
-            self._active_jobs += 1
-        try:
-            yield
-        finally:
-            with self._condition:
-                self._active_jobs = max(0, self._active_jobs - 1)
-                self._condition.notify_all()
-
-
-image_job_limiter = ImageJobLimiter()
 
 
 def _extract_response_image(input_value: object) -> tuple[bytes, str] | None:
@@ -95,8 +71,7 @@ class ChatGPTService:
 
             print(f"[{label}] start pooled token={request_token[:12]}... model={model} index={index}/{total}{extra_log}")
             try:
-                with image_job_limiter.acquire():
-                    result = operation(request_token)
+                result = operation(request_token)
                 account = self.account_service.mark_image_result(request_token, success=True)
                 print(
                     f"[{label}] success pooled token={request_token[:12]}... "
