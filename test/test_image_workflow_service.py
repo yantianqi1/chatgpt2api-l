@@ -14,9 +14,9 @@ class FakeQuotaGateway:
         self.committed: list[str] = []
         self.released: list[str] = []
 
-    def reserve_quota(self, count: int) -> str:
-        self.reserved.append(count)
-        return f"reservation-{count}"
+    def reserve_quota(self, amount_cents: int) -> str:
+        self.reserved.append(amount_cents)
+        return f"reservation-{amount_cents}"
 
     def commit_reservation(self, token: str) -> None:
         self.committed.append(token)
@@ -26,25 +26,51 @@ class FakeQuotaGateway:
 
 
 class FakeBillingStore:
-    def __init__(self, *, balances: dict[str, int] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        balances: dict[str, int] | None = None,
+        fail_commit: bool = False,
+        fail_release: bool = False,
+    ) -> None:
         self.balances = dict(balances or {})
+        self.reserved: dict[str, tuple[str, int, str, int]] = {}
         self.charges: list[tuple[str, int, str, int]] = []
+        self.released: list[str] = []
         self.price_requests: list[str] = []
+        self.fail_commit = fail_commit
+        self.fail_release = fail_release
 
     def get_model_price_cents(self, model: str) -> int:
         self.price_requests.append(model)
         return MODEL_PRICE_CENTS
 
-    def get_user_balance_cents(self, user_id: str) -> int:
-        return self.balances[user_id]
-
-    def debit_user_balance(self, *, user_id: str, amount_cents: int, model: str, count: int) -> int:
+    def reserve_user_balance(self, *, user_id: str, amount_cents: int, model: str, count: int) -> str:
         balance = self.balances[user_id]
-        if balance < amount_cents:
+        reserved_total = sum(amount for owner, amount, _, _ in self.reserved.values() if owner == user_id)
+        if balance - reserved_total < amount_cents:
             raise RuntimeError("public user balance is insufficient")
-        self.balances[user_id] = balance - amount_cents
+        token = f"user-reservation-{len(self.reserved) + 1}"
+        self.reserved[token] = (user_id, amount_cents, model, count)
+        return token
+
+    def commit_user_balance_reservation(self, token: str) -> int:
+        if self.fail_commit:
+            raise RuntimeError("commit failed")
+        user_id, amount_cents, model, count = self.reserved.pop(token)
+        self.balances[user_id] -= amount_cents
         self.charges.append((user_id, amount_cents, model, count))
         return self.balances[user_id]
+
+    def release_user_balance_reservation(self, token: str) -> None:
+        if self.fail_release:
+            raise RuntimeError("release failed")
+        self.reserved.pop(token)
+        self.released.append(token)
+
+    def touch_user_balance_reservation(self, token: str) -> None:
+        if token not in self.reserved:
+            raise KeyError("user reservation not found")
 
 
 class FakeImageBackend:
@@ -59,13 +85,7 @@ class FakeImageBackend:
             raise self.error
         return self.result
 
-    def edit_with_pool(
-        self,
-        prompt: str,
-        images,
-        model: str,
-        n: int,
-    ) -> dict[str, object]:
+    def edit_with_pool(self, prompt: str, images, model: str, n: int) -> dict[str, object]:
         self.calls.append(("edit", (prompt, images, model, n)))
         if self.error is not None:
             raise self.error
@@ -121,12 +141,7 @@ def test_authenticated_public_generation_uses_user_balance_not_public_panel() ->
     backend = FakeImageBackend()
     service = ImageWorkflowService(quota_gateway=quota, billing_store=billing, image_backend=backend)
 
-    result = service.generate_public(
-        prompt="cat",
-        model="gpt-image-1",
-        n=2,
-        public_user_id="user-1",
-    )
+    result = service.generate_public(prompt="cat", model="gpt-image-1", n=2, public_user_id="user-1")
 
     assert result["data"] == [{"b64_json": "abc"}]
     assert quota.reserved == []
@@ -136,6 +151,36 @@ def test_authenticated_public_generation_uses_user_balance_not_public_panel() ->
     assert billing.balances["user-1"] == 300
 
 
+def test_authenticated_public_generation_releases_user_reservation_on_failure() -> None:
+    quota = FakeQuotaGateway()
+    billing = FakeBillingStore(balances={"user-1": 500})
+    backend = FakeImageBackend(error=ImageGenerationError("boom"))
+    service = ImageWorkflowService(quota_gateway=quota, billing_store=billing, image_backend=backend)
+
+    with pytest.raises(ImageGenerationError):
+        service.generate_public(prompt="cat", model="gpt-image-1", n=2, public_user_id="user-1")
+
+    assert quota.reserved == []
+    assert quota.committed == []
+    assert quota.released == []
+    assert billing.charges == []
+    assert billing.released == ["user-reservation-1"]
+    assert billing.balances["user-1"] == 500
+
+
+def test_authenticated_public_generation_surfaces_release_failure_after_operation_error() -> None:
+    quota = FakeQuotaGateway()
+    billing = FakeBillingStore(balances={"user-1": 500}, fail_release=True)
+    backend = FakeImageBackend(error=ImageGenerationError("boom"))
+    service = ImageWorkflowService(quota_gateway=quota, billing_store=billing, image_backend=backend)
+
+    with pytest.raises(RuntimeError, match="public user reservation release failed after operation error"):
+        service.generate_public(prompt="cat", model="gpt-image-1", n=2, public_user_id="user-1")
+
+    assert billing.charges == []
+    assert billing.reserved == {"user-reservation-1": ("user-1", 200, "gpt-image-1", 2)}
+
+
 def test_authenticated_public_generation_fails_when_balance_is_insufficient() -> None:
     quota = FakeQuotaGateway()
     billing = FakeBillingStore(balances={"user-1": 100})
@@ -143,12 +188,7 @@ def test_authenticated_public_generation_fails_when_balance_is_insufficient() ->
     service = ImageWorkflowService(quota_gateway=quota, billing_store=billing, image_backend=backend)
 
     with pytest.raises(RuntimeError, match="public user balance is insufficient"):
-        service.generate_public(
-            prompt="cat",
-            model="gpt-image-1",
-            n=2,
-            public_user_id="user-1",
-        )
+        service.generate_public(prompt="cat", model="gpt-image-1", n=2, public_user_id="user-1")
 
     assert quota.reserved == []
     assert quota.committed == []
@@ -156,6 +196,36 @@ def test_authenticated_public_generation_fails_when_balance_is_insufficient() ->
     assert billing.charges == []
     assert billing.balances["user-1"] == 100
     assert backend.calls == []
+
+
+def test_authenticated_public_generation_releases_reservation_when_commit_fails() -> None:
+    quota = FakeQuotaGateway()
+    billing = FakeBillingStore(balances={"user-1": 500}, fail_commit=True)
+    backend = FakeImageBackend()
+    service = ImageWorkflowService(quota_gateway=quota, billing_store=billing, image_backend=backend)
+
+    with pytest.raises(RuntimeError, match="public user charge commit failed"):
+        service.generate_public(prompt="cat", model="gpt-image-1", n=2, public_user_id="user-1")
+
+    assert quota.reserved == []
+    assert quota.committed == []
+    assert quota.released == []
+    assert billing.charges == []
+    assert billing.released == ["user-reservation-1"]
+    assert billing.balances["user-1"] == 500
+
+
+def test_authenticated_public_generation_surfaces_release_failure_after_commit_error() -> None:
+    quota = FakeQuotaGateway()
+    billing = FakeBillingStore(balances={"user-1": 500}, fail_commit=True, fail_release=True)
+    backend = FakeImageBackend()
+    service = ImageWorkflowService(quota_gateway=quota, billing_store=billing, image_backend=backend)
+
+    with pytest.raises(RuntimeError, match="public user charge commit failed and reservation release failed"):
+        service.generate_public(prompt="cat", model="gpt-image-1", n=2, public_user_id="user-1")
+
+    assert billing.charges == []
+    assert billing.reserved == {"user-reservation-1": ("user-1", 200, "gpt-image-1", 2)}
 
 
 def test_anonymous_public_generation_still_uses_public_panel_quota() -> None:

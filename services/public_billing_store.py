@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import secrets
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
 
 ACTIVATION_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 ACTIVATION_CODE_LENGTH = 32
 MODEL_PRICE_SEEDS = (("gpt-image-1", 100), ("gpt-image-2", 100))
+USER_BALANCE_RESERVATION_TTL_SECONDS = 86_400
 SCHEMA_SQL = (
     "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, balance_cents INTEGER NOT NULL CHECK (balance_cents >= 0), status TEXT NOT NULL CHECK (status IN ('active', 'disabled')), created_at TEXT NOT NULL, updated_at TEXT NOT NULL);"
     "CREATE TABLE IF NOT EXISTS user_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, token_hash TEXT NOT NULL, expires_at TEXT NOT NULL, created_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, FOREIGN KEY(user_id) REFERENCES users(id));"
@@ -17,8 +18,6 @@ SCHEMA_SQL = (
     "CREATE TABLE IF NOT EXISTS quota_ledger (id INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT NOT NULL, user_id INTEGER, change_cents INTEGER NOT NULL, balance_after_cents INTEGER NOT NULL CHECK (balance_after_cents >= 0), reason TEXT NOT NULL, reference_type TEXT NOT NULL, reference_id TEXT NOT NULL, created_at TEXT NOT NULL, FOREIGN KEY(user_id) REFERENCES users(id));"
     "CREATE TABLE IF NOT EXISTS model_pricing (model TEXT PRIMARY KEY, price_cents INTEGER NOT NULL CHECK (price_cents >= 0), enabled INTEGER NOT NULL, updated_at TEXT NOT NULL);"
 )
-
-
 class PublicBillingStore:
     def __init__(self, db_file: Path):
         self.db_file = db_file
@@ -101,28 +100,104 @@ class PublicBillingStore:
             raise RuntimeError("public user not found")
         return int(row["balance_cents"])
 
-    def debit_user_balance(self, *, user_id: str, amount_cents: int, model: str, count: int) -> int:
-        debit_cents = self._require_nonnegative_cents(amount_cents, name="amount_cents")
+    def reserve_user_balance(self, *, user_id: str, amount_cents: int, model: str, count: int) -> str:
+        reserved_cents = self._require_nonnegative_cents(amount_cents, name="amount_cents")
         user_db_id = self._require_user_id(user_id)
-        now = self._now()
+        token = secrets.token_urlsafe(16)
+        created_at = self._now()
         with self._lock, self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            self._cleanup_expired_user_reservations(conn, created_at)
             row = conn.execute("SELECT balance_cents FROM users WHERE id = ?", (user_db_id,)).fetchone()
             if row is None:
                 raise RuntimeError("public user not found")
             balance_cents = int(row["balance_cents"])
-            if balance_cents < debit_cents:
+            reserved_total = int(
+                conn.execute(
+                    "SELECT COALESCE(SUM(amount_cents), 0) FROM user_balance_reservations WHERE user_id = ?",
+                    (user_db_id,),
+                ).fetchone()[0]
+                or 0
+            )
+            if balance_cents - reserved_total < reserved_cents:
                 raise RuntimeError("public user balance is insufficient")
-            next_balance = balance_cents - debit_cents
+            conn.execute(
+                """
+                INSERT INTO user_balance_reservations (
+                    token, user_id, amount_cents, model, count, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (token, user_db_id, reserved_cents, str(model or "").strip(), int(count), created_at),
+            )
+        return token
+
+    def commit_user_balance_reservation(self, token: str) -> int:
+        reservation_token = str(token or "").strip()
+        if not reservation_token:
+            raise KeyError("user reservation not found")
+        committed_at = self._now()
+        with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            reservation = conn.execute(
+                """
+                SELECT user_id, amount_cents, model, count
+                FROM user_balance_reservations
+                WHERE token = ?
+                """,
+                (reservation_token,),
+            ).fetchone()
+            if reservation is None:
+                raise KeyError("user reservation not found")
+            row = conn.execute("SELECT balance_cents FROM users WHERE id = ?", (int(reservation["user_id"]),)).fetchone()
+            if row is None:
+                raise RuntimeError("public user not found")
+            balance_cents = int(row["balance_cents"])
+            amount_cents = int(reservation["amount_cents"])
+            if balance_cents < amount_cents:
+                raise RuntimeError("public user balance is insufficient")
+            next_balance = balance_cents - amount_cents
             conn.execute(
                 "UPDATE users SET balance_cents = ?, updated_at = ? WHERE id = ?",
-                (next_balance, now, user_db_id),
+                (next_balance, committed_at, int(reservation["user_id"])),
             )
             conn.execute(
                 "INSERT INTO quota_ledger (scope, user_id, change_cents, balance_after_cents, reason, reference_type, reference_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                ("user", user_db_id, -debit_cents, next_balance, "public_image_charge", "image_model", f"{model}:{count}", now),
+                (
+                    "user",
+                    int(reservation["user_id"]),
+                    -amount_cents,
+                    next_balance,
+                    "public_image_charge",
+                    "image_model",
+                    f"{reservation['model']}:{reservation['count']}",
+                    committed_at,
+                ),
             )
+            conn.execute("DELETE FROM user_balance_reservations WHERE token = ?", (reservation_token,))
         return next_balance
+
+    def release_user_balance_reservation(self, token: str) -> None:
+        reservation_token = str(token or "").strip()
+        if not reservation_token:
+            raise KeyError("user reservation not found")
+        with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if conn.execute("DELETE FROM user_balance_reservations WHERE token = ?", (reservation_token,)).rowcount == 0:
+                raise KeyError("user reservation not found")
+
+    def touch_user_balance_reservation(self, token: str) -> None:
+        reservation_token = str(token or "").strip()
+        if not reservation_token:
+            raise KeyError("user reservation not found")
+        touched_at = self._now()
+        with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if conn.execute(
+                "UPDATE user_balance_reservations SET created_at = ? WHERE token = ?",
+                (touched_at, reservation_token),
+            ).rowcount == 0:
+                raise KeyError("user reservation not found")
 
     def delete_session_by_token_hash(self, token_hash: str) -> bool:
         with self._lock, self._connect() as conn:
@@ -242,6 +317,19 @@ class PublicBillingStore:
 
     def _create_tables(self, conn: sqlite3.Connection) -> None:
         conn.executescript(SCHEMA_SQL)
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_balance_reservations (
+                token TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                amount_cents INTEGER NOT NULL CHECK (amount_cents >= 0),
+                model TEXT NOT NULL,
+                count INTEGER NOT NULL CHECK (count > 0),
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+            """
+        )
 
     def _seed_model_pricing(self, conn: sqlite3.Connection) -> None:
         for model, price_cents in MODEL_PRICE_SEEDS:
@@ -306,6 +394,11 @@ class PublicBillingStore:
             code = "".join(secrets.choice(ACTIVATION_CODE_ALPHABET) for _ in range(ACTIVATION_CODE_LENGTH))
             if conn.execute("SELECT 1 FROM activation_codes WHERE code = ?", (code,)).fetchone() is None:
                 return code
+
+    def _cleanup_expired_user_reservations(self, conn: sqlite3.Connection, now_iso: str) -> None:
+        now = datetime.fromisoformat(now_iso)
+        cutoff = (now - timedelta(seconds=USER_BALANCE_RESERVATION_TTL_SECONDS)).isoformat()
+        conn.execute("DELETE FROM user_balance_reservations WHERE created_at < ?", (cutoff,))
 
     def _format_model_pricing(self, row: sqlite3.Row) -> dict[str, str]:
         return {"model": str(row["model"]), "price": self._format_money(int(row["price_cents"])), "enabled": "1" if int(row["enabled"]) else "0"}

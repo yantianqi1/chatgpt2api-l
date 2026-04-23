@@ -10,6 +10,9 @@ from zoneinfo import ZoneInfo
 
 MODE_DAILY = "daily"
 MODE_FIXED = "fixed"
+QUOTA_UNIT_CENTS = "cents"
+QUOTA_UNIT_LEGACY_IMAGES = "images"
+LEGACY_PUBLIC_PANEL_IMAGE_CENTS = 100
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
 
@@ -19,6 +22,7 @@ class PublicPanelConfig:
     title: str
     description: str
     mode: str
+    quota_unit: str
     daily_limit: int
     daily_used: int
     daily_reset_date: str
@@ -65,6 +69,7 @@ class PublicPanelService:
             title=str(title or "").strip(),
             description=str(description or "").strip(),
             mode=normalized_mode,
+            quota_unit=QUOTA_UNIT_CENTS,
             daily_limit=max(0, int(daily_limit)),
             daily_used=max(0, int(self._config.daily_used if normalized_mode == self._config.mode else 0)),
             daily_reset_date=self._today_key(),
@@ -80,6 +85,7 @@ class PublicPanelService:
                     title=next_config.title,
                     description=next_config.description,
                     mode=next_config.mode,
+                    quota_unit=next_config.quota_unit,
                     daily_limit=next_config.daily_limit,
                     daily_used=max(0, min(self._config.daily_used, next_config.daily_limit))
                     if self._config.mode == MODE_DAILY
@@ -106,6 +112,7 @@ class PublicPanelService:
                 title=self._config.title,
                 description=self._config.description,
                 mode=self._config.mode,
+                quota_unit=self._config.quota_unit,
                 daily_limit=self._config.daily_limit,
                 daily_used=self._config.daily_used,
                 daily_reset_date=self._config.daily_reset_date,
@@ -147,6 +154,7 @@ class PublicPanelService:
                     title=self._config.title,
                     description=self._config.description,
                     mode=self._config.mode,
+                    quota_unit=self._config.quota_unit,
                     daily_limit=self._config.daily_limit,
                     daily_used=self._config.daily_used,
                     daily_reset_date=self._config.daily_reset_date,
@@ -162,6 +170,7 @@ class PublicPanelService:
                     title=self._config.title,
                     description=self._config.description,
                     mode=self._config.mode,
+                    quota_unit=self._config.quota_unit,
                     daily_limit=self._config.daily_limit,
                     daily_used=next_used,
                     daily_reset_date=self._config.daily_reset_date,
@@ -201,10 +210,11 @@ class PublicPanelService:
             title=str(payload.get("title") or "").strip(),
             description=str(payload.get("description") or "").strip(),
             mode=self._normalize_mode(payload.get("mode")),
-            daily_limit=max(0, int(payload.get("daily_limit") or 0)),
-            daily_used=max(0, int(payload.get("daily_used") or 0)),
+            quota_unit=QUOTA_UNIT_CENTS,
+            daily_limit=self._normalize_quota_value(payload.get("daily_limit"), payload.get("quota_unit")),
+            daily_used=self._normalize_quota_value(payload.get("daily_used"), payload.get("quota_unit")),
             daily_reset_date=str(payload.get("daily_reset_date") or "").strip() or self._today_key(),
-            fixed_quota=max(0, int(payload.get("fixed_quota") or payload.get("quota") or 0)),
+            fixed_quota=self._normalize_quota_value(payload.get("fixed_quota") or payload.get("quota"), payload.get("quota_unit")),
             updated_at=str(payload.get("updated_at") or "").strip() or self._build_timestamp(),
         )
 
@@ -216,6 +226,7 @@ class PublicPanelService:
             title=self._config.title,
             description=self._config.description,
             mode=self._config.mode,
+            quota_unit=self._config.quota_unit,
             daily_limit=self._config.daily_limit,
             daily_used=0,
             daily_reset_date=self._today_key(),
@@ -265,6 +276,7 @@ class PublicPanelService:
             title="",
             description="",
             mode=MODE_DAILY,
+            quota_unit=QUOTA_UNIT_CENTS,
             daily_limit=0,
             daily_used=0,
             daily_reset_date=self._today_key(),
@@ -278,6 +290,16 @@ class PublicPanelService:
         if mode not in {MODE_DAILY, MODE_FIXED}:
             raise ValueError("mode must be 'daily' or 'fixed'")
         return mode
+
+    @staticmethod
+    def _normalize_quota_value(value: object, quota_unit: object) -> int:
+        amount = max(0, int(value or 0))
+        raw_unit = str(quota_unit or "").strip().lower()
+        if raw_unit in {"", QUOTA_UNIT_LEGACY_IMAGES}:
+            return amount * LEGACY_PUBLIC_PANEL_IMAGE_CENTS
+        if raw_unit == QUOTA_UNIT_CENTS:
+            return amount
+        raise ValueError("quota_unit must be 'cents' or 'images'")
 
     @staticmethod
     def _build_timestamp() -> str:

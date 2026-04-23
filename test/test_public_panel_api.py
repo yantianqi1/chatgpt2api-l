@@ -21,6 +21,7 @@ def write_public_panel_file(
     *,
     enabled: bool,
     mode: str = "fixed",
+    quota_unit: str = "cents",
     daily_limit: int = 0,
     daily_used: int = 0,
     daily_reset_date: str = "2026-04-22",
@@ -33,6 +34,7 @@ def write_public_panel_file(
                 "title": "studio",
                 "description": "demo",
                 "mode": mode,
+                "quota_unit": quota_unit,
                 "daily_limit": daily_limit,
                 "daily_used": daily_used,
                 "daily_reset_date": daily_reset_date,
@@ -89,6 +91,30 @@ def test_public_status_does_not_require_admin_auth(tmp_path: Path) -> None:
     assert payload["mode"] == "fixed"
     assert payload["available_quota"] == 5
     assert payload["quota"] == 5
+
+
+def test_legacy_public_panel_quota_without_unit_is_migrated_to_cents(tmp_path: Path) -> None:
+    store_file = tmp_path / "public_panel.json"
+    store_file.write_text(
+        json.dumps(
+            {
+                "enabled": True,
+                "title": "studio",
+                "description": "demo",
+                "mode": "fixed",
+                "fixed_quota": 5,
+                "updated_at": "2026-04-22T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with with_public_panel_file(store_file):
+        client = TestClient(create_app())
+        response = client.get("/api/public-panel/status")
+
+    assert response.status_code == 200
+    assert response.json()["fixed_quota"] == 500
 
 
 def test_admin_public_panel_config_requires_auth(tmp_path: Path) -> None:
@@ -173,6 +199,28 @@ def test_public_generation_commits_quota_on_success(tmp_path: Path) -> None:
     assert saved["fixed_quota"] == 300
 
 
+def test_public_generation_defaults_to_gpt_image_1_when_model_is_omitted(tmp_path: Path) -> None:
+    panel_file = tmp_path / "public_panel.json"
+    billing_file = tmp_path / "public_billing.db"
+    write_public_panel_file(panel_file, enabled=True, mode="fixed", fixed_quota=500)
+
+    with with_public_panel_file(panel_file), with_public_billing_file(billing_file):
+        with patch.object(
+            ChatGPTService,
+            "generate_with_pool",
+            autospec=True,
+            return_value={"created": 1, "data": [{"b64_json": "abc"}]},
+        ) as mocked_generate:
+            client = TestClient(create_app(), base_url="https://testserver")
+            response = client.post(
+                "/api/public-panel/images/generations",
+                json={"prompt": "cat", "n": 1},
+            )
+
+    assert response.status_code == 200
+    mocked_generate.assert_called_once_with(ANY, "cat", "gpt-image-1", 1)
+
+
 def test_public_generation_rolls_back_quota_on_failure(tmp_path: Path) -> None:
     panel_file = tmp_path / "public_panel.json"
     billing_file = tmp_path / "public_billing.db"
@@ -246,6 +294,51 @@ def test_authenticated_public_generation_fails_when_balance_is_insufficient(tmp_
     assert saved["fixed_quota"] == 500
     store = PublicBillingStore(billing_file)
     assert store.get_user_balance_cents(user_id) == 100
+
+
+def test_invalid_public_session_does_not_fallback_to_anonymous_quota(tmp_path: Path) -> None:
+    panel_file = tmp_path / "public_panel.json"
+    billing_file = tmp_path / "public_billing.db"
+    write_public_panel_file(panel_file, enabled=True, mode="fixed", fixed_quota=500)
+
+    with with_public_panel_file(panel_file), with_public_billing_file(billing_file):
+        with patch.object(
+            ChatGPTService,
+            "generate_with_pool",
+            autospec=True,
+            return_value={"created": 1, "data": [{"b64_json": "abc"}]},
+        ) as mocked_generate:
+            client = TestClient(create_app(), base_url="https://testserver")
+            client.cookies.set(SESSION_COOKIE_NAME, "invalid-session-token")
+            response = client.post(
+                "/api/public-panel/images/generations",
+                json={"prompt": "cat", "model": "gpt-image-1", "n": 2},
+            )
+
+    assert response.status_code == 401
+    assert response.json()["detail"]["error"] == "login required"
+    mocked_generate.assert_not_called()
+    saved = json.loads(panel_file.read_text(encoding="utf-8"))
+    assert saved["fixed_quota"] == 500
+
+
+def test_public_generation_returns_403_when_model_price_is_unavailable(tmp_path: Path) -> None:
+    panel_file = tmp_path / "public_panel.json"
+    billing_file = tmp_path / "public_billing.db"
+    write_public_panel_file(panel_file, enabled=True, mode="fixed", fixed_quota=500)
+
+    store = PublicBillingStore(billing_file)
+    store.update_model_pricing(model="gpt-image-1", price_cents=100, enabled=False)
+
+    with with_public_panel_file(panel_file), with_public_billing_file(billing_file):
+        client = TestClient(create_app(), base_url="https://testserver")
+        response = client.post(
+            "/api/public-panel/images/generations",
+            json={"prompt": "cat", "model": "gpt-image-1", "n": 1},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["error"] == "model price is unavailable"
 
 
 def test_anonymous_public_generation_still_uses_public_panel_quota(tmp_path: Path) -> None:

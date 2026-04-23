@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from threading import Event, Thread
 from typing import Iterable, Protocol
 
 from services.public_money import compute_cost_cents
 
+USER_BALANCE_RESERVATION_HEARTBEAT_SECONDS = 60
+
 
 class ImageQuotaGateway(Protocol):
-    def reserve_quota(self, count: int) -> str: ...
+    def reserve_quota(self, amount_cents: int) -> str: ...
 
     def commit_reservation(self, token: str) -> object: ...
 
@@ -28,9 +31,13 @@ class ImageBackend(Protocol):
 class PublicBillingStore(Protocol):
     def get_model_price_cents(self, model: str) -> int: ...
 
-    def get_user_balance_cents(self, user_id: str) -> int: ...
+    def reserve_user_balance(self, *, user_id: str, amount_cents: int, model: str, count: int) -> str: ...
 
-    def debit_user_balance(self, *, user_id: str, amount_cents: int, model: str, count: int) -> int: ...
+    def commit_user_balance_reservation(self, token: str) -> int: ...
+
+    def release_user_balance_reservation(self, token: str) -> None: ...
+
+    def touch_user_balance_reservation(self, token: str) -> None: ...
 
 
 class ImageWorkflowService:
@@ -98,10 +105,10 @@ class ImageWorkflowService:
             )
         return self._run_anonymous_public(operation, cost_cents)
 
-    def _run_anonymous_public(self, operation, cost_cents: int) -> dict[str, object]:
+    def _run_anonymous_public(self, operation, amount_cents: int) -> dict[str, object]:
         if self.quota_gateway is None:
             raise RuntimeError("public quota gateway is not configured")
-        reservation = self.quota_gateway.reserve_quota(cost_cents)
+        reservation = self.quota_gateway.reserve_quota(amount_cents)
         try:
             result = operation()
         except Exception:
@@ -121,15 +128,46 @@ class ImageWorkflowService:
     ) -> dict[str, object]:
         if self.billing_store is None:
             raise RuntimeError("public billing store is not configured")
-        if self.billing_store.get_user_balance_cents(user_id) < cost_cents:
-            raise RuntimeError("public user balance is insufficient")
-        result = operation()
-        self.billing_store.debit_user_balance(
+        reservation = self.billing_store.reserve_user_balance(
             user_id=user_id,
             amount_cents=cost_cents,
             model=model,
             count=count,
         )
+        heartbeat_stop = Event()
+        heartbeat_errors: list[Exception] = []
+        heartbeat = Thread(
+            target=self._heartbeat_user_reservation,
+            args=(reservation, heartbeat_stop, heartbeat_errors),
+            daemon=True,
+        )
+        heartbeat.start()
+        try:
+            result = operation()
+        except Exception:
+            heartbeat_stop.set()
+            heartbeat.join(timeout=1)
+            try:
+                self.billing_store.release_user_balance_reservation(reservation)
+            except Exception as release_exc:
+                raise RuntimeError("public user reservation release failed after operation error") from release_exc
+            raise
+        heartbeat_stop.set()
+        heartbeat.join(timeout=1)
+        if heartbeat_errors:
+            try:
+                self.billing_store.release_user_balance_reservation(reservation)
+            except Exception as release_exc:
+                raise RuntimeError("public user reservation heartbeat failed and release failed") from release_exc
+            raise RuntimeError("public user reservation heartbeat failed") from heartbeat_errors[0]
+        try:
+            self.billing_store.commit_user_balance_reservation(reservation)
+        except Exception as exc:
+            try:
+                self.billing_store.release_user_balance_reservation(reservation)
+            except Exception as release_exc:
+                raise RuntimeError("public user charge commit failed and reservation release failed") from release_exc
+            raise RuntimeError("public user charge commit failed") from exc
         return result
 
     def _compute_cost_cents(self, model: str, count: int) -> int:
@@ -139,3 +177,14 @@ class ImageWorkflowService:
             price_cents=self.billing_store.get_model_price_cents(model),
             count=count,
         )
+
+    def _heartbeat_user_reservation(self, token: str, stop_event: Event, errors: list[Exception]) -> None:
+        while not stop_event.wait(USER_BALANCE_RESERVATION_HEARTBEAT_SECONDS):
+            try:
+                if self.billing_store is None:
+                    raise RuntimeError("public billing store is not configured")
+                self.billing_store.touch_user_balance_reservation(token)
+            except Exception as exc:
+                errors.append(exc)
+                stop_event.set()
+                return

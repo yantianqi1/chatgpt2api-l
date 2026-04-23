@@ -55,6 +55,7 @@ export type PublicPanelConfig = {
   title: string;
   description: string;
   mode: PublicPanelMode;
+  quota_unit: "cents";
   daily_limit: number;
   daily_used: number;
   daily_reset_date: string;
