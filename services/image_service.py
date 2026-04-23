@@ -164,6 +164,15 @@ def _is_pending_image_message(message: str) -> bool:
     return any(marker in normalized for marker in PENDING_IMAGE_MESSAGE_MARKERS)
 
 
+def _is_retryable_stream_error(exc: Exception) -> bool:
+    text = str(exc or "").lower()
+    return (
+        "http/2 stream" in text
+        or "stream was not closed cleanly" in text
+        or exc.__class__.__name__ == "RequestException"
+    )
+
+
 def _retry(
     fn,
     retries: int = 4,
@@ -557,7 +566,23 @@ def _parse_sse(response) -> dict:
     file_ids: list[str] = []
     conversation_id = ""
     text_parts: list[str] = []
-    for raw_line in response.iter_lines():
+    iterator = iter(response.iter_lines())
+    while True:
+        try:
+            raw_line = next(iterator)
+        except StopIteration:
+            break
+        except Exception as exc:
+            if _is_retryable_stream_error(exc):
+                if conversation_id or file_ids:
+                    return {
+                        "conversation_id": conversation_id,
+                        "file_ids": file_ids,
+                        "text": "".join(text_parts),
+                        "stream_error": str(exc),
+                    }
+                raise ImageGenerationError(f"upstream stream interrupted: {exc}") from exc
+            raise
         if not raw_line:
             continue
         if isinstance(raw_line, bytes):
@@ -793,11 +818,14 @@ def generate_image_result(
         actual_conversation_id = parsed.get("conversation_id") or ""
         file_ids = parsed.get("file_ids") or []
         response_text = str(parsed.get("text") or "").strip()
-        if not file_ids and _is_pending_image_message(response_text):
-            raise ImageGenerationPendingError(response_text)
         if actual_conversation_id and not file_ids:
             file_ids = _poll_image_ids(session, access_token, device_id, actual_conversation_id, deadline=deadline)
         if not file_ids:
+            if response_text and _is_pending_image_message(response_text):
+                raise ImageGenerationPendingError(response_text)
+            stream_error = str(parsed.get("stream_error") or "").strip()
+            if stream_error:
+                raise ImageGenerationError(f"upstream stream interrupted: {stream_error}")
             if response_text:
                 raise ImageGenerationError(response_text)
             raise ImageGenerationError("no image returned from upstream")
@@ -947,14 +975,17 @@ def edit_image_result(
         input_file_ids = {image.file_id for image in uploaded_images}
         file_ids = _filter_output_file_ids(parsed.get("file_ids") or [], input_file_ids)
         response_text = str(parsed.get("text") or "").strip()
-        if not file_ids and _is_pending_image_message(response_text):
-            raise ImageGenerationPendingError(response_text)
         if actual_conversation_id and not file_ids:
             file_ids = _filter_output_file_ids(
                 _poll_image_ids(session, access_token, device_id, actual_conversation_id, deadline=deadline),
                 input_file_ids,
             )
         if not file_ids:
+            if response_text and _is_pending_image_message(response_text):
+                raise ImageGenerationPendingError(response_text)
+            stream_error = str(parsed.get("stream_error") or "").strip()
+            if stream_error:
+                raise ImageGenerationError(f"upstream stream interrupted: {stream_error}")
             if response_text:
                 raise ImageGenerationError(response_text)
             raise ImageGenerationError("no image returned from upstream")

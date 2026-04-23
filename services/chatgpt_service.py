@@ -10,6 +10,7 @@ from services.config import get_image_settings
 from services.image_errors import (
     IMAGE_REQUEST_TIMEOUT_MESSAGE,
     ImageGenerationError,
+    ImageGenerationPendingError,
     ImageGenerationTimeoutError,
     image_generation_status_code,
 )
@@ -108,7 +109,7 @@ class ChatGPTService:
                     self.account_service.remove_token(request_token)
                     print(f"[{label}] remove invalid token={request_token[:12]}...")
                     continue
-                if isinstance(exc, ImageGenerationTimeoutError):
+                if isinstance(exc, (ImageGenerationTimeoutError, ImageGenerationPendingError)):
                     raise
                 failed_attempts += 1
                 if failed_attempts >= retry_limit:

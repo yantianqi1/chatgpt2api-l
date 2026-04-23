@@ -13,6 +13,7 @@ from services.api import create_app
 from services.chatgpt_service import ChatGPTService
 from services.config import config
 from services.image_service import ImageGenerationError
+from services.image_errors import ImageGenerationPendingError
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -341,6 +342,27 @@ class ChatCompletionsApiTests(unittest.TestCase):
         self.assertEqual(mocked_generate.call_count, 2)
         self.assertEqual(len(result["data"]), 1)
         self.assertEqual(account_service.mark_image_result.call_count, 2)
+
+    def test_service_does_not_retry_pending_image_generation_errors(self) -> None:
+        account_service = MagicMock()
+        account_service.get_available_access_token.side_effect = ["token-a", "token-b"]
+        account_service.mark_image_result.return_value = {"quota": 1, "status": "正常"}
+        service = ChatGPTService(account_service)
+
+        with (
+            patch(
+                "services.chatgpt_service.get_image_settings",
+                return_value=SimpleNamespace(auto_retry_times=1, request_timeout_seconds=90),
+            ),
+            patch(
+                "services.chatgpt_service.generate_image_result",
+                side_effect=ImageGenerationPendingError("正在处理图片"),
+            ) as mocked_generate,
+        ):
+            with self.assertRaises(ImageGenerationPendingError):
+                service.generate_with_pool("draw a cat", "gpt-image-2", 1, "url")
+
+        self.assertEqual(mocked_generate.call_count, 1)
 
     def test_images_generation_defaults_to_url_response_format(self) -> None:
         with patch.object(
