@@ -10,6 +10,60 @@ MODEL_PRICE_SEEDS = (
     ("gpt-image-2", 100),
 )
 
+SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    balance_cents INTEGER NOT NULL CHECK (balance_cents >= 0),
+    status TEXT NOT NULL CHECK (status IN ('active', 'disabled')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS user_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    token_hash TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS activation_codes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL UNIQUE,
+    amount_cents INTEGER NOT NULL CHECK (amount_cents >= 0),
+    batch_note TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('unused', 'redeemed')),
+    created_at TEXT NOT NULL,
+    redeemed_by_user_id INTEGER,
+    redeemed_at TEXT,
+    FOREIGN KEY(redeemed_by_user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS quota_ledger (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope TEXT NOT NULL,
+    user_id INTEGER,
+    change_cents INTEGER NOT NULL,
+    balance_after_cents INTEGER NOT NULL CHECK (balance_after_cents >= 0),
+    reason TEXT NOT NULL,
+    reference_type TEXT NOT NULL,
+    reference_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS model_pricing (
+    model TEXT PRIMARY KEY,
+    price_cents INTEGER NOT NULL CHECK (price_cents >= 0),
+    enabled INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"""
+
 
 class PublicBillingStore:
     def __init__(self, db_file: Path):
@@ -68,69 +122,21 @@ class PublicBillingStore:
     def _init_db(self) -> None:
         self.db_file.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
-            conn.executescript(
+            self._create_tables(conn)
+            self._seed_model_pricing(conn)
+
+    def _create_tables(self, conn: sqlite3.Connection) -> None:
+        conn.executescript(SCHEMA_SQL)
+
+    def _seed_model_pricing(self, conn: sqlite3.Connection) -> None:
+        for model, price_cents in MODEL_PRICE_SEEDS:
+            conn.execute(
                 """
-                CREATE TABLE IF NOT EXISTS users (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    username TEXT NOT NULL UNIQUE,
-                    password_hash TEXT NOT NULL,
-                    balance_cents INTEGER NOT NULL CHECK (balance_cents >= 0),
-                    status TEXT NOT NULL CHECK (status IN ('active', 'disabled')),
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS user_sessions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER NOT NULL,
-                    token_hash TEXT NOT NULL,
-                    expires_at TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    last_seen_at TEXT NOT NULL,
-                    FOREIGN KEY(user_id) REFERENCES users(id)
-                );
-
-                CREATE TABLE IF NOT EXISTS activation_codes (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    code TEXT NOT NULL UNIQUE,
-                    amount_cents INTEGER NOT NULL CHECK (amount_cents >= 0),
-                    batch_note TEXT NOT NULL,
-                    status TEXT NOT NULL CHECK (status IN ('unused', 'redeemed')),
-                    created_at TEXT NOT NULL,
-                    redeemed_by_user_id INTEGER,
-                    redeemed_at TEXT,
-                    FOREIGN KEY(redeemed_by_user_id) REFERENCES users(id)
-                );
-
-                CREATE TABLE IF NOT EXISTS quota_ledger (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    scope TEXT NOT NULL,
-                    user_id INTEGER,
-                    change_cents INTEGER NOT NULL,
-                    balance_after_cents INTEGER NOT NULL CHECK (balance_after_cents >= 0),
-                    reason TEXT NOT NULL,
-                    reference_type TEXT NOT NULL,
-                    reference_id TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    FOREIGN KEY(user_id) REFERENCES users(id)
-                );
-
-                CREATE TABLE IF NOT EXISTS model_pricing (
-                    model TEXT PRIMARY KEY,
-                    price_cents INTEGER NOT NULL CHECK (price_cents >= 0),
-                    enabled INTEGER NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-                """
+                INSERT OR IGNORE INTO model_pricing (model, price_cents, enabled, updated_at)
+                VALUES (?, ?, 1, ?)
+                """,
+                (model, price_cents, self._now()),
             )
-            for model, price_cents in MODEL_PRICE_SEEDS:
-                conn.execute(
-                    """
-                    INSERT OR IGNORE INTO model_pricing (model, price_cents, enabled, updated_at)
-                    VALUES (?, ?, 1, ?)
-                    """,
-                    (model, price_cents, self._now()),
-                )
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_file)
