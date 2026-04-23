@@ -183,6 +183,25 @@ def test_admin_activation_codes_can_filter_by_batch_note(tmp_path: Path) -> None
     assert {item["batch_note"] for item in response.json()["items"]} == {"spring"}
 
 
+def test_admin_activation_codes_can_filter_empty_batch_note(tmp_path: Path) -> None:
+    db_file = tmp_path / "public_billing.db"
+    store = PublicBillingStore(db_file)
+    store.create_activation_codes(count=1, amount_cents=550, batch_note="")
+    store.create_activation_codes(count=1, amount_cents=550, batch_note="spring")
+
+    with with_public_billing_file(db_file):
+        client = TestClient(create_app(), base_url="https://testserver")
+        response = client.get(
+            "/api/admin/billing/activation-codes",
+            headers=admin_headers(),
+            params={"batch_note": ""},
+        )
+
+    assert response.status_code == 200
+    assert len(response.json()["items"]) == 1
+    assert response.json()["items"][0]["batch_note"] == ""
+
+
 def test_admin_activation_codes_can_filter_by_redeemed_username(tmp_path: Path) -> None:
     db_file = tmp_path / "public_billing.db"
     store = PublicBillingStore(db_file)

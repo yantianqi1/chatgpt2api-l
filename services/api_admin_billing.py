@@ -50,7 +50,7 @@ def register_admin_billing_routes(router: APIRouter, *, billing_store, require_a
             "items": _serialize_activation_codes(
                 billing_store.list_activation_codes(
                     status=_normalize_optional_text(status),
-                    batch_note=_normalize_optional_text(batch_note),
+                    batch_note=_normalize_batch_note(batch_note),
                     redeemed_username=_normalize_optional_text(redeemed_username),
                 )
             )
@@ -89,3 +89,9 @@ def _normalize_optional_text(value: str | None) -> str | None:
         return None
     cleaned = value.strip()
     return cleaned or None
+
+
+def _normalize_batch_note(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return value
