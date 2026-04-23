@@ -30,6 +30,16 @@ class PublicBillingStore:
             rows = conn.execute("SELECT model, price_cents, enabled FROM model_pricing ORDER BY model").fetchall()
         return [self._format_model_pricing(row) for row in rows]
 
+    def update_model_pricing(self, *, model: str, price_cents: int, enabled: bool) -> list[dict[str, str]] | None:
+        price_cents = self._require_nonnegative_cents(price_cents, name="price_cents")
+        with self._lock, self._connect() as conn:
+            if conn.execute(
+                "UPDATE model_pricing SET price_cents = ?, enabled = ?, updated_at = ? WHERE model = ?",
+                (price_cents, 1 if enabled else 0, self._now(), model),
+            ).rowcount == 0:
+                return None
+        return self.list_model_pricing()
+
     def create_user(self, *, username: str, password_hash: str, signup_bonus_cents: int) -> dict[str, str]:
         bonus_cents = self._require_nonnegative_cents(signup_bonus_cents, name="signup_bonus_cents")
         now = self._now()
@@ -122,6 +132,11 @@ class PublicBillingStore:
                 ).fetchone()
                 rows.append(self._format_activation_code(row))
         return rows
+
+    def list_activation_codes(self) -> list[dict[str, object]]:
+        with self._lock, self._connect() as conn:
+            rows = conn.execute("SELECT id, code, amount_cents, batch_note, status, created_at, redeemed_by_user_id, redeemed_at FROM activation_codes ORDER BY id DESC").fetchall()
+        return [self._format_activation_code(row) for row in rows]
 
     def redeem_activation_code(self, *, code: str, user_id: str) -> dict[str, object]:
         if isinstance(code, bool) or not isinstance(code, str) or not code:
@@ -277,4 +292,4 @@ class PublicBillingStore:
         return {"id": str(row["id"]), "user_id": str(row["user_id"]), "expires_at": str(row["expires_at"]), "created_at": str(row["created_at"]), "last_seen_at": str(row["last_seen_at"])}
 
     def _format_activation_code(self, row: sqlite3.Row) -> dict[str, object]:
-        return {"id": str(row["id"]), "code": str(row["code"]), "amount_cents": int(row["amount_cents"]), "batch_note": str(row["batch_note"]), "status": str(row["status"]), "created_at": str(row["created_at"]), "redeemed_by_user_id": None if row["redeemed_by_user_id"] is None else str(row["redeemed_by_user_id"]), "redeemed_at": None if row["redeemed_at"] is None else str(row["redeemed_at"])}
+        return {"id": str(row["id"]), "code": str(row["code"]), "amount": self._format_money(int(row["amount_cents"])), "batch_note": str(row["batch_note"]), "status": str(row["status"]), "created_at": str(row["created_at"]), "redeemed_by_user_id": None if row["redeemed_by_user_id"] is None else str(row["redeemed_by_user_id"]), "redeemed_at": None if row["redeemed_at"] is None else str(row["redeemed_at"])}

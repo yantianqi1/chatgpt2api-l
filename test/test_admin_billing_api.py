@@ -33,6 +33,14 @@ def test_admin_can_list_model_pricing(tmp_path: Path) -> None:
     assert response.json()["items"][0]["model"] == "gpt-image-1"
 
 
+def test_admin_billing_routes_require_auth(tmp_path: Path) -> None:
+    with with_public_billing_file(tmp_path / "public_billing.db"):
+        client = TestClient(create_app(), base_url="https://testserver")
+        response = client.get("/api/admin/billing/model-pricing")
+
+    assert response.status_code == 401
+
+
 def test_admin_can_update_model_pricing(tmp_path: Path) -> None:
     db_file = tmp_path / "public_billing.db"
     store = PublicBillingStore(db_file)
@@ -53,6 +61,18 @@ def test_admin_can_update_model_pricing(tmp_path: Path) -> None:
     reloaded = PublicBillingStore(db_file).list_model_pricing()
     assert reloaded[0]["price"] == "2.50"
     assert reloaded[0]["enabled"] == "0"
+
+
+def test_admin_update_model_pricing_returns_404_for_unknown_model(tmp_path: Path) -> None:
+    with with_public_billing_file(tmp_path / "public_billing.db"):
+        client = TestClient(create_app(), base_url="https://testserver")
+        response = client.post(
+            "/api/admin/billing/model-pricing",
+            headers=admin_headers(),
+            json={"model": "unknown-model", "price": "2.50", "enabled": False},
+        )
+
+    assert response.status_code == 404
 
 
 def test_admin_can_batch_generate_activation_codes(tmp_path: Path) -> None:
@@ -79,3 +99,14 @@ def test_admin_can_batch_generate_activation_codes(tmp_path: Path) -> None:
 
     assert list_response.status_code == 200
     assert len(list_response.json()["items"]) == 2
+
+
+def test_admin_store_helpers_cover_model_pricing_and_activation_codes(tmp_path: Path) -> None:
+    store = PublicBillingStore(tmp_path / "public_billing.db")
+
+    updated = store.update_model_pricing(model="gpt-image-1", price_cents=250, enabled=False)
+    codes = store.list_activation_codes()
+
+    assert updated[0]["price"] == "2.50"
+    assert updated[0]["enabled"] == "0"
+    assert codes == []
