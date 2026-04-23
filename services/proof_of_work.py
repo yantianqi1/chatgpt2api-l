@@ -7,8 +7,6 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 
-import pybase64
-
 """
 这个文件用于生成上游 ChatGPT 网页接口需要的 PoW 参数。
 它会解析首页 HTML 并缓存构建信息，组装浏览器指纹风格的配置数据，
@@ -460,6 +458,8 @@ def get_answer_token(seed, diff, config):
 
 
 def generate_answer(seed, diff, config):
+    from pybase64 import b64encode
+
     diff_len = len(diff)
     seed_encoded = seed.encode()
     static_config_part1 = (json.dumps(config[:3], separators=(',', ':'), ensure_ascii=False)[:-1] + ',').encode()
@@ -472,12 +472,12 @@ def generate_answer(seed, diff, config):
         dynamic_json_i = str(i).encode()
         dynamic_json_j = str(i >> 1).encode()
         final_json_bytes = static_config_part1 + dynamic_json_i + static_config_part2 + dynamic_json_j + static_config_part3
-        base_encode = pybase64.b64encode(final_json_bytes)
+        base_encode = b64encode(final_json_bytes)
         hash_value = hashlib.sha3_512(seed_encoded + base_encode).digest()
         if hash_value[:diff_len] <= target_diff:
             return base_encode.decode(), True
 
-    return "wQ8Lk5FbGpA2NcR9dShT6gYjU7VxZ4D" + pybase64.b64encode(f'"{seed}"'.encode()).decode(), False
+    return "wQ8Lk5FbGpA2NcR9dShT6gYjU7VxZ4D" + b64encode(f'"{seed}"'.encode()).decode(), False
 
 
 def get_requirements_token(config):
