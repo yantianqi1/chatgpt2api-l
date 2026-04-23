@@ -3,6 +3,19 @@ import { httpRequest } from "@/lib/request";
 export type AccountType = "Free" | "Plus" | "Pro" | "Team";
 export type AccountStatus = "正常" | "限流" | "异常" | "禁用";
 export type ImageModel = "gpt-image-1" | "gpt-image-2";
+export type AdminModelPricing = { model: string; price: string; enabled: "0" | "1" };
+export type AdminActivationCodeStatus = "unused" | "redeemed";
+export type AdminActivationCode = {
+  id: string;
+  code: string;
+  amount: string;
+  amount_cents: number;
+  batch_note: string;
+  status: AdminActivationCodeStatus;
+  created_at: string;
+  redeemed_by_user_id: string | null;
+  redeemed_at: string | null;
+};
 
 export type Account = {
   id: string;
@@ -47,6 +60,8 @@ type AccountUpdateResponse = {
   item: Account;
   items: Account[];
 };
+type AdminModelPricingResponse = { items: AdminModelPricing[] };
+type AdminActivationCodesResponse = { items: AdminActivationCode[] };
 
 export type PublicPanelMode = "daily" | "fixed";
 
@@ -172,6 +187,37 @@ export async function addPublicPanelQuota(amount: number) {
   return httpRequest<PublicPanelConfig>("/api/public-panel/quota/add", {
     method: "POST",
     body: { amount },
+  });
+}
+
+export async function fetchAdminModelPricing() {
+  return httpRequest<AdminModelPricingResponse>("/api/admin/billing/model-pricing");
+}
+export async function updateAdminModelPricing(payload: { model: string; price: string | number; enabled: boolean }) {
+  return httpRequest<AdminModelPricingResponse>("/api/admin/billing/model-pricing", {
+    method: "POST",
+    body: payload,
+  });
+}
+export async function fetchAdminActivationCodes(params?: {
+  status?: AdminActivationCodeStatus;
+  batch_note?: string;
+  redeemed_username?: string;
+}) {
+  const searchParams = new URLSearchParams();
+  if (params?.status) searchParams.set("status", params.status);
+  if (params && Object.prototype.hasOwnProperty.call(params, "batch_note")) {
+    searchParams.set("batch_note", params.batch_note ?? "");
+  }
+  if (params?.redeemed_username) searchParams.set("redeemed_username", params.redeemed_username);
+  const query = searchParams.toString();
+  const path = query ? `/api/admin/billing/activation-codes?${query}` : "/api/admin/billing/activation-codes";
+  return httpRequest<AdminActivationCodesResponse>(path);
+}
+export async function createAdminActivationCodes(payload: { count: number; amount: string | number; batch_note: string }) {
+  return httpRequest<AdminActivationCodesResponse>("/api/admin/billing/activation-codes", {
+    method: "POST",
+    body: payload,
   });
 }
 
