@@ -29,11 +29,15 @@ type PublicPanelDraft = {
 };
 
 function formatQuotaValue(value: number) {
-  return (Math.max(0, value) / 100).toFixed(2);
+  return String(Math.max(0, Math.floor(value)));
 }
 
 function parseQuotaValue(value: string) {
-  return Math.max(0, Math.round((Number(value) || 0) * 100));
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return 0;
+  }
+  return Math.max(0, Math.floor(parsed));
 }
 
 function createDraft(config: PublicPanelConfig): PublicPanelDraft {
@@ -60,7 +64,7 @@ function getDisabledLabel(reason: PublicPanelConfig["disabled_reason"]) {
 export function PublicPanelSettings() {
   const [config, setConfig] = useState<PublicPanelConfig | null>(null);
   const [draft, setDraft] = useState<PublicPanelDraft | null>(null);
-  const [quotaIncrement, setQuotaIncrement] = useState("10.00");
+  const [quotaIncrement, setQuotaIncrement] = useState("10");
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isAddingQuota, setIsAddingQuota] = useState(false);
@@ -129,7 +133,7 @@ export function PublicPanelSettings() {
       const nextConfig = await addPublicPanelQuota(amount);
       setConfig(nextConfig);
       setDraft(createDraft(nextConfig));
-      toast.success(`已补充 ${quotaIncrement} 点额度`);
+      toast.success(`已补充 ${amount} 点额度`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "补充额度失败");
     } finally {
@@ -147,7 +151,7 @@ export function PublicPanelSettings() {
             </div>
             <div>
               <h2 className="text-lg font-semibold tracking-tight">公共生图面板</h2>
-              <p className="text-sm text-stone-500">独立域名匿名可用，只提供图片生成和图片编辑能力，匿名额度按模型价格扣减。</p>
+              <p className="text-sm text-stone-500">独立域名匿名可用，只提供图片生成和图片编辑能力，匿名额度每张图片扣 1 点。</p>
             </div>
           </div>
           {config ? (
@@ -220,7 +224,7 @@ export function PublicPanelSettings() {
                     <Input
                       type="number"
                       min="0"
-                      step="0.01"
+                      step="1"
                       value={draft.daily_limit}
                       onChange={(event) =>
                         setDraft((prev) => (prev ? { ...prev, daily_limit: event.target.value } : prev))
@@ -235,7 +239,7 @@ export function PublicPanelSettings() {
                       <Input
                         type="number"
                         min="0"
-                        step="0.01"
+                        step="1"
                         value={draft.fixed_quota}
                         onChange={(event) =>
                           setDraft((prev) => (prev ? { ...prev, fixed_quota: event.target.value } : prev))
@@ -246,8 +250,8 @@ export function PublicPanelSettings() {
                     <div className="flex flex-col gap-2 sm:flex-row">
                       <Input
                         type="number"
-                        min="0.01"
-                        step="0.01"
+                        min="1"
+                        step="1"
                         value={quotaIncrement}
                         onChange={(event) => setQuotaIncrement(event.target.value)}
                         className="h-11 rounded-xl border-stone-200 bg-white"
@@ -294,7 +298,7 @@ export function PublicPanelSettings() {
                 <div className="rounded-xl bg-white px-4 py-3 text-sm text-stone-600">
                   {config.disabled_reason === "disabled" ? "当前公开站已关闭。用户仍能打开页面，但不能提交图片请求。" : null}
                   {config.disabled_reason === "quota_exhausted" ? "当前公开站额度已耗尽。用户仍能打开页面，但不能继续提交。" : null}
-                  {config.disabled_reason === null ? "当前公开站可匿名使用。图片生成和编辑会按模型价格扣减公共点数额度。" : null}
+                  {config.disabled_reason === null ? "当前公开站可匿名使用。图片生成和编辑每张图片扣 1 点公共额度。" : null}
                 </div>
               </div>
             </div>

@@ -10,16 +10,16 @@ import type { ImageConversation, StoredImage } from "@/store/image-conversations
 type ImageResultsProps = {
   selectedConversation: ImageConversation | null;
   isSelectedGenerating: boolean;
-  isRegenerating: boolean;
+  isRegenerating?: boolean;
   openLightbox: (imageId: string) => void;
   formatConversationTime: (value: string) => string;
-  onRegenerate: () => void | Promise<void>;
+  onRegenerate?: () => void | Promise<void>;
 };
 
 export function ImageResults({
   selectedConversation,
   isSelectedGenerating,
-  isRegenerating,
+  isRegenerating = false,
   openLightbox,
   formatConversationTime,
   onRegenerate,
@@ -144,16 +144,18 @@ export function ImageResults({
               ) : null}
             </div>
 
-            <Button
-              type="button"
-              variant="outline"
-              className="h-9 rounded-full border-stone-200 bg-white px-4 text-sm text-stone-700"
-              onClick={() => void onRegenerate()}
-              disabled={isSelectedGenerating || isRegenerating}
-            >
-              {isRegenerating ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCcw className="size-4" />}
-              重新生成
-            </Button>
+            {onRegenerate ? (
+              <Button
+                type="button"
+                variant="outline"
+                className="h-9 rounded-full border-stone-200 bg-white px-4 text-sm text-stone-700"
+                onClick={() => void onRegenerate()}
+                disabled={isSelectedGenerating || isRegenerating}
+              >
+                {isRegenerating ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCcw className="size-4" />}
+                重新生成
+              </Button>
+            ) : null}
           </div>
 
           {selectedConversation.status === "error" && selectedConversation.images.length === 0 ? (

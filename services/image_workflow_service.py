@@ -9,7 +9,7 @@ USER_BALANCE_RESERVATION_HEARTBEAT_SECONDS = 60
 
 
 class ImageQuotaGateway(Protocol):
-    def reserve_quota(self, amount_cents: int) -> str: ...
+    def reserve_quota(self, count: int) -> str: ...
 
     def commit_reservation(self, token: str) -> object: ...
 
@@ -110,8 +110,8 @@ class ImageWorkflowService:
         )
 
     def _run_public(self, operation, *, model: str, count: int, public_user_id: str | None) -> dict[str, object]:
-        cost_cents = self._compute_cost_cents(model, count)
         if public_user_id:
+            cost_cents = self._compute_cost_cents(model, count)
             return self._run_authenticated_public(
                 operation,
                 model=model,
@@ -119,12 +119,13 @@ class ImageWorkflowService:
                 cost_cents=cost_cents,
                 user_id=public_user_id,
             )
-        return self._run_anonymous_public(operation, cost_cents)
+        self._ensure_model_available(model)
+        return self._run_anonymous_public(operation, count)
 
-    def _run_anonymous_public(self, operation, amount_cents: int) -> dict[str, object]:
+    def _run_anonymous_public(self, operation, count: int) -> dict[str, object]:
         if self.quota_gateway is None:
             raise RuntimeError("public quota gateway is not configured")
-        reservation = self.quota_gateway.reserve_quota(amount_cents)
+        reservation = self.quota_gateway.reserve_quota(count)
         try:
             result = operation()
         except Exception:
@@ -193,6 +194,11 @@ class ImageWorkflowService:
             price_cents=self.billing_store.get_model_price_cents(model),
             count=count,
         )
+
+    def _ensure_model_available(self, model: str) -> None:
+        if self.billing_store is None:
+            raise RuntimeError("public billing store is not configured")
+        self.billing_store.get_model_price_cents(model)
 
     def _heartbeat_user_reservation(self, token: str, stop_event: Event, errors: list[Exception]) -> None:
         while not stop_event.wait(USER_BALANCE_RESERVATION_HEARTBEAT_SECONDS):

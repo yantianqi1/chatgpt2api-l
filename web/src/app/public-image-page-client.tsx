@@ -1,8 +1,7 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { LoaderCircle, LogOut, Sparkles, Ticket, UserRound } from "lucide-react";
+import { LoaderCircle, LogOut, Ticket, UserRound } from "lucide-react";
 import { toast } from "sonner";
 
 import { ImageComposer } from "@/app/image/components/image-composer";
@@ -103,6 +102,10 @@ function getAnonymousStatusHint(status: PublicPanelConfig | null, statusError: s
   return null;
 }
 
+function formatSharedQuota(value: number) {
+  return String(Math.max(0, Math.floor(value)));
+}
+
 async function resolvePublicUser(setter: (value: PublicUser | null) => void) {
   try {
     const response = await fetchPublicMe();
@@ -158,8 +161,9 @@ export default function PublicImagePageClient() {
         .filter((img) => !!img.src),
     [selectedConversation],
   );
-  const composerQuotaLabel = publicUser ? publicUser.balance : panelStatus ? String(panelStatus.available_quota) : statusError ? "—" : "加载中";
+  const composerQuotaLabel = publicUser ? publicUser.balance : panelStatus ? formatSharedQuota(panelStatus.available_quota) : statusError ? "—" : "加载中";
   const composerStatusHint = publicUser ? null : getAnonymousStatusHint(panelStatus, statusError);
+  const showAccountPanel = isLoadingPublicUser || publicUser;
 
   const loadStatus = useCallback(async () => {
     try {
@@ -390,19 +394,9 @@ export default function PublicImagePageClient() {
 
   return (
     <>
-      <section className="px-3 pt-4">
-        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_360px]">
-          <div className="rounded-[32px] border border-white/80 bg-white/90 px-6 py-6 shadow-sm">
-            <div className="flex items-start gap-4">
-              <div className="flex size-12 items-center justify-center rounded-2xl bg-stone-950 text-white"><Sparkles className="size-5" /></div>
-              <div className="space-y-2">
-                <h1 className="text-3xl font-semibold tracking-tight text-stone-950">{panelStatus?.title || "匿名公共生图面板"}</h1>
-                <p className="max-w-3xl text-sm leading-6 text-stone-500">{panelStatus?.description || "无需登录，直接生成图片或上传参考图进行编辑。"}</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="rounded-[32px] border border-white/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.95),rgba(246,240,232,0.92))] p-5 shadow-sm">
+      {showAccountPanel ? (
+        <section className="px-3 pt-4">
+          <div className="ml-auto max-w-[360px] rounded-[32px] border border-white/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.95),rgba(246,240,232,0.92))] p-5 shadow-sm">
             {isLoadingPublicUser ? (
               <div className="flex min-h-[204px] items-center justify-center gap-3 text-sm text-stone-500">
                 <LoaderCircle className="size-4 animate-spin" />
@@ -467,37 +461,12 @@ export default function PublicImagePageClient() {
                   退出登录
                 </Button>
               </div>
-            ) : (
-              <div className="space-y-4">
-                <div className="space-y-3">
-                  <Badge variant="secondary" className="rounded-full bg-white px-3 py-1 text-[11px] tracking-[0.22em] text-stone-700 uppercase">
-                    Guest Access
-                  </Badge>
-                  <div className="space-y-2">
-                    <h2 className="text-xl font-semibold tracking-tight text-stone-950">匿名可直接创作，登录后可沉淀个人权益。</h2>
-                    <p className="text-sm leading-6 text-stone-500">注册后可以查看个人余额、兑换激活码，并把公开生图切换到你的会员账户。</p>
-                  </div>
-                </div>
-
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <Button asChild className="h-11 rounded-2xl bg-stone-950 text-white hover:bg-stone-800">
-                    <Link href="/login">登录</Link>
-                  </Button>
-                  <Button asChild variant="outline" className="h-11 rounded-2xl border-stone-200 bg-white/80 text-stone-700 hover:bg-white">
-                    <Link href="/login?mode=register">注册</Link>
-                  </Button>
-                </div>
-
-                <div className="rounded-[24px] border border-white/80 bg-white/70 p-4 text-sm leading-6 text-stone-600">
-                  匿名模式继续可用。登录只是为了绑定个人余额与激活码，不会打断现在的公开试用流程。
-                </div>
-              </div>
-            )}
+            ) : null}
           </div>
-        </div>
-      </section>
+        </section>
+      ) : null}
 
-      <section className="mx-auto grid h-[calc(100vh-12rem)] min-h-0 w-full max-w-[1380px] grid-cols-1 gap-3 px-3 pb-6 lg:grid-cols-[240px_minmax(0,1fr)]">
+      <section className={`mx-auto grid min-h-0 w-full max-w-[1380px] grid-cols-1 gap-3 px-3 pb-6 lg:grid-cols-[240px_minmax(0,1fr)] ${showAccountPanel ? "h-[calc(100vh-12rem)]" : "h-[calc(100vh-2rem)] pt-4"}`}>
         <ImageSidebar conversations={conversations} isLoadingHistory={isLoadingHistory} generatingIds={generatingIds} selectedConversationId={selectedConversationId} onCreateDraft={() => { setSelectedConversationId(null); resetComposer(); textareaRef.current?.focus(); }} onClearHistory={() => void clearImageConversations().then(() => { setConversations([]); setSelectedConversationId(null); toast.success("已清空历史记录"); }).catch((error) => { toast.error(error instanceof Error ? error.message : "清空历史记录失败"); })} onSelectConversation={setSelectedConversationId} onDeleteConversation={(id) => void deleteImageConversation(id).then(() => { setConversations((prev) => prev.filter((item) => item.id !== id)); setSelectedConversationId((prev) => (prev === id ? null : prev)); }).catch((error) => { toast.error(error instanceof Error ? error.message : "删除会话失败"); })} formatConversationTime={formatConversationTime} />
 
         <div className="flex min-h-0 flex-col gap-4">
@@ -511,7 +480,7 @@ export default function PublicImagePageClient() {
             model={imageModel}
             imageCount={imageCount}
             availableQuota={composerQuotaLabel}
-            statusHint={composerStatusHint}
+            statusHint={composerStatusHint ?? undefined}
             hasAnyGenerating={generatingIds.size > 0}
             generatingCount={generatingIds.size}
             referenceImages={referenceImages}

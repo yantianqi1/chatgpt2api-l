@@ -10,9 +10,10 @@ from zoneinfo import ZoneInfo
 
 MODE_DAILY = "daily"
 MODE_FIXED = "fixed"
-QUOTA_UNIT_CENTS = "cents"
+QUOTA_UNIT_POINTS = "points"
+QUOTA_UNIT_LEGACY_CENTS = "cents"
 QUOTA_UNIT_LEGACY_IMAGES = "images"
-LEGACY_PUBLIC_PANEL_IMAGE_CENTS = 100
+LEGACY_PUBLIC_PANEL_CENTS_PER_POINT = 100
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
 
@@ -69,7 +70,7 @@ class PublicPanelService:
             title=str(title or "").strip(),
             description=str(description or "").strip(),
             mode=normalized_mode,
-            quota_unit=QUOTA_UNIT_CENTS,
+            quota_unit=QUOTA_UNIT_POINTS,
             daily_limit=max(0, int(daily_limit)),
             daily_used=max(0, int(self._config.daily_used if normalized_mode == self._config.mode else 0)),
             daily_reset_date=self._today_key(),
@@ -210,7 +211,7 @@ class PublicPanelService:
             title=str(payload.get("title") or "").strip(),
             description=str(payload.get("description") or "").strip(),
             mode=self._normalize_mode(payload.get("mode")),
-            quota_unit=QUOTA_UNIT_CENTS,
+            quota_unit=QUOTA_UNIT_POINTS,
             daily_limit=self._normalize_quota_value(payload.get("daily_limit"), payload.get("quota_unit")),
             daily_used=self._normalize_quota_value(payload.get("daily_used"), payload.get("quota_unit")),
             daily_reset_date=str(payload.get("daily_reset_date") or "").strip() or self._today_key(),
@@ -276,7 +277,7 @@ class PublicPanelService:
             title="",
             description="",
             mode=MODE_DAILY,
-            quota_unit=QUOTA_UNIT_CENTS,
+            quota_unit=QUOTA_UNIT_POINTS,
             daily_limit=0,
             daily_used=0,
             daily_reset_date=self._today_key(),
@@ -295,11 +296,17 @@ class PublicPanelService:
     def _normalize_quota_value(value: object, quota_unit: object) -> int:
         amount = max(0, int(value or 0))
         raw_unit = str(quota_unit or "").strip().lower()
-        if raw_unit in {"", QUOTA_UNIT_LEGACY_IMAGES}:
-            return amount * LEGACY_PUBLIC_PANEL_IMAGE_CENTS
-        if raw_unit == QUOTA_UNIT_CENTS:
+        if raw_unit in {"", QUOTA_UNIT_POINTS, QUOTA_UNIT_LEGACY_IMAGES}:
             return amount
-        raise ValueError("quota_unit must be 'cents' or 'images'")
+        if raw_unit == QUOTA_UNIT_LEGACY_CENTS:
+            return PublicPanelService._legacy_cents_to_points(amount)
+        raise ValueError("quota_unit must be 'points' or legacy 'cents'")
+
+    @staticmethod
+    def _legacy_cents_to_points(amount: int) -> int:
+        if amount <= 0:
+            return 0
+        return (amount + LEGACY_PUBLIC_PANEL_CENTS_PER_POINT - 1) // LEGACY_PUBLIC_PANEL_CENTS_PER_POINT
 
     @staticmethod
     def _build_timestamp() -> str:

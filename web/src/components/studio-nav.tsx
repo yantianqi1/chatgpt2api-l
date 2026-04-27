@@ -1,14 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { BookOpenText, ImagePlus } from "lucide-react";
+import { ImagePlus } from "lucide-react";
 import { usePathname } from "next/navigation";
 
 import { cn } from "@/lib/utils";
 
 const studioNavItems = [
   { href: "/", label: "单图创作", description: "保留现有公开生图首页", icon: ImagePlus },
-  { href: "/comic", label: "漫创工作台", description: "项目、章节、分镜与任务面板", icon: BookOpenText },
 ];
 
 export function StudioNav() {
@@ -34,7 +33,7 @@ export function StudioNav() {
               studio
             </div>
           </div>
-          <nav className="grid gap-3 md:grid-cols-2">
+          <nav className="grid gap-3">
             {studioNavItems.map((item) => {
               const active = pathname === item.href;
               const Icon = item.icon;

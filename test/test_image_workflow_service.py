@@ -14,9 +14,9 @@ class FakeQuotaGateway:
         self.committed: list[str] = []
         self.released: list[str] = []
 
-    def reserve_quota(self, amount_cents: int) -> str:
-        self.reserved.append(amount_cents)
-        return f"reservation-{amount_cents}"
+    def reserve_quota(self, count: int) -> str:
+        self.reserved.append(count)
+        return f"reservation-{count}"
 
     def commit_reservation(self, token: str) -> None:
         self.committed.append(token)
@@ -101,8 +101,8 @@ def test_public_generation_commits_reserved_quota_on_success() -> None:
     result = service.generate_public(prompt="cat", model="gpt-image-1", n=2)
 
     assert result["data"] == [{"b64_json": "abc"}]
-    assert quota.reserved == [200]
-    assert quota.committed == ["reservation-200"]
+    assert quota.reserved == [2]
+    assert quota.committed == ["reservation-2"]
     assert quota.released == []
     assert billing.charges == []
 
@@ -116,9 +116,9 @@ def test_public_generation_rolls_back_quota_on_failure() -> None:
     with pytest.raises(ImageGenerationError):
         service.generate_public(prompt="cat", model="gpt-image-1", n=2)
 
-    assert quota.reserved == [200]
+    assert quota.reserved == [2]
     assert quota.committed == []
-    assert quota.released == ["reservation-200"]
+    assert quota.released == ["reservation-2"]
     assert billing.charges == []
 
 
@@ -236,7 +236,7 @@ def test_anonymous_public_generation_still_uses_public_panel_quota() -> None:
 
     service.generate_public(prompt="cat", model="gpt-image-1", n=2)
 
-    assert quota.reserved == [200]
-    assert quota.committed == ["reservation-200"]
+    assert quota.reserved == [2]
+    assert quota.committed == ["reservation-2"]
     assert quota.released == []
     assert billing.charges == []
