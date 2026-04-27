@@ -118,6 +118,7 @@ export function ImageComposer({
                   className="group size-16 overflow-hidden rounded-2xl border border-stone-200 bg-stone-50 transition hover:border-stone-300"
                   aria-label={`预览参考图 ${image.name || index + 1}`}
                 >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={image.dataUrl}
                     alt={image.name || `参考图 ${index + 1}`}
@@ -185,7 +186,7 @@ export function ImageComposer({
                   )}
                   {availableQuota ? (
                     <div className="rounded-full bg-stone-100 px-3 py-2 text-xs font-medium text-stone-600">
-                      剩余额度 {availableQuota}
+                      当前可用额度 {availableQuota}
                     </div>
                   ) : null}
                   {statusHint ? (
