@@ -15,7 +15,11 @@ from services.config import (
     update_image_settings,
 )
 from services.cpa_service import cpa_config, cpa_import_service, list_remote_files
-from services.image_errors import ImageGenerationError, image_generation_status_code
+from services.image_errors import (
+    ImageGenerationError,
+    image_generation_error_payload,
+    image_generation_status_code,
+)
 from services.streaming import iter_chat_completion_sse, iter_response_sse
 from services.utils import parse_image_count, parse_image_response_format
 
@@ -236,7 +240,10 @@ def register_openai_routes(router: APIRouter, *, chatgpt_service: ChatGPTService
                 response_format,
             )
         except ImageGenerationError as exc:
-            raise HTTPException(status_code=image_generation_status_code(exc), detail={"error": str(exc)}) from exc
+            raise HTTPException(
+                status_code=image_generation_status_code(exc),
+                detail=image_generation_error_payload(exc),
+            ) from exc
 
     @router.post("/v1/images/edits")
     async def edit_images(
@@ -261,7 +268,10 @@ def register_openai_routes(router: APIRouter, *, chatgpt_service: ChatGPTService
                 normalized_response_format,
             )
         except ImageGenerationError as exc:
-            raise HTTPException(status_code=image_generation_status_code(exc), detail={"error": str(exc)}) from exc
+            raise HTTPException(
+                status_code=image_generation_status_code(exc),
+                detail=image_generation_error_payload(exc),
+            ) from exc
 
     @router.post("/v1/chat/completions")
     async def create_chat_completion(body: ChatCompletionRequest, authorization: str | None = Header(default=None)):

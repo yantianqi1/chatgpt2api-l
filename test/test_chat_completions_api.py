@@ -13,7 +13,11 @@ from services.api import create_app
 from services.chatgpt_service import ChatGPTService
 from services.config import config
 from services.image_service import ImageGenerationError
-from services.image_errors import ImageGenerationPendingError
+from services.image_errors import (
+    IMAGE_REQUEST_TIMEOUT_MESSAGE,
+    ImageGenerationPendingError,
+    ImageGenerationTimeoutError,
+)
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -383,6 +387,55 @@ class ChatCompletionsApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         mocked_generate.assert_called_once_with(ANY, "draw a cat", "gpt-image-2", 1, "url")
+
+    def test_images_generation_timeout_returns_upstream_policy_message(self) -> None:
+        with patch.object(
+            ChatGPTService,
+            "generate_with_pool",
+            autospec=True,
+            side_effect=ImageGenerationTimeoutError(IMAGE_REQUEST_TIMEOUT_MESSAGE),
+        ):
+            response = self.client.post(
+                "/v1/images/generations",
+                headers=self.headers,
+                json={
+                    "prompt": "draw a cat",
+                    "model": "gpt-image-2",
+                    "n": 1,
+                },
+            )
+
+        self.assertEqual(response.status_code, 504)
+        payload = response.json()
+        self.assertNotIn("detail", payload)
+        self.assertEqual(payload["error"]["type"], "invalid_request_error")
+        self.assertIsNone(payload["error"]["param"])
+        self.assertEqual(payload["error"]["code"], "content_policy_violation")
+        self.assertEqual(payload["error"]["message"], IMAGE_REQUEST_TIMEOUT_MESSAGE)
+
+    def test_image_chat_completion_timeout_returns_openai_error_payload(self) -> None:
+        with patch.object(
+            ChatGPTService,
+            "generate_with_pool",
+            autospec=True,
+            side_effect=ImageGenerationTimeoutError(IMAGE_REQUEST_TIMEOUT_MESSAGE),
+        ):
+            response = self.client.post(
+                "/v1/chat/completions",
+                headers=self.headers,
+                json={
+                    "model": "gpt-image-2",
+                    "messages": [{"role": "user", "content": "draw a cat"}],
+                },
+            )
+
+        self.assertEqual(response.status_code, 504)
+        payload = response.json()
+        self.assertNotIn("detail", payload)
+        self.assertEqual(payload["error"]["type"], "invalid_request_error")
+        self.assertIsNone(payload["error"]["param"])
+        self.assertEqual(payload["error"]["code"], "content_policy_violation")
+        self.assertEqual(payload["error"]["message"], IMAGE_REQUEST_TIMEOUT_MESSAGE)
 
     def test_generated_images_are_served_as_static_files(self) -> None:
         with self.generated_image_file("test-image.png", b"png-bytes"):

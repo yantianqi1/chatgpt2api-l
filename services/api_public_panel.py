@@ -5,7 +5,11 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from services.api_public_auth import SESSION_COOKIE_NAME
-from services.image_errors import ImageGenerationError, image_generation_status_code
+from services.image_errors import (
+    ImageGenerationError,
+    image_generation_error_payload,
+    image_generation_status_code,
+)
 from services.utils import parse_image_count, parse_image_response_format
 
 FORBIDDEN_PUBLIC_ERRORS = {
@@ -93,7 +97,10 @@ def register_public_panel_routes(
                 public_user_id,
             )
         except ImageGenerationError as exc:
-            raise HTTPException(status_code=image_generation_status_code(exc), detail={"error": str(exc)}) from exc
+            raise HTTPException(
+                status_code=image_generation_status_code(exc),
+                detail=image_generation_error_payload(exc),
+            ) from exc
         except RuntimeError as exc:
             raise _map_public_runtime_error(exc) from exc
 
@@ -128,7 +135,10 @@ def register_public_panel_routes(
                 public_user_id,
             )
         except ImageGenerationError as exc:
-            raise HTTPException(status_code=image_generation_status_code(exc), detail={"error": str(exc)}) from exc
+            raise HTTPException(
+                status_code=image_generation_status_code(exc),
+                detail=image_generation_error_payload(exc),
+            ) from exc
         except RuntimeError as exc:
             raise _map_public_runtime_error(exc) from exc
 

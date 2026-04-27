@@ -9,6 +9,39 @@ type RequestConfig = AxiosRequestConfig & {
   withCredentials?: boolean;
 };
 
+type ErrorPayload = {
+    detail?: {
+        error?: string | { message?: string };
+    };
+    error?: string | {
+        message?: string;
+    };
+    message?: string;
+};
+
+function extractErrorMessage(payload: ErrorPayload | undefined) {
+    const detailError = payload?.detail?.error;
+    if (typeof detailError === "string" && detailError.trim()) {
+        return detailError;
+    }
+    if (detailError && typeof detailError === "object" && typeof detailError.message === "string" && detailError.message.trim()) {
+        return detailError.message;
+    }
+
+    const error = payload?.error;
+    if (typeof error === "string" && error.trim()) {
+        return error;
+    }
+    if (error && typeof error === "object" && typeof error.message === "string" && error.message.trim()) {
+        return error.message;
+    }
+
+    if (typeof payload?.message === "string" && payload.message.trim()) {
+        return payload.message;
+    }
+    return "";
+}
+
 const request = axios.create({
     baseURL: webConfig.apiUrl.replace(/\/$/, ""),
 });
@@ -28,7 +61,7 @@ request.interceptors.request.use(async (config) => {
 
 request.interceptors.response.use(
     (response) => response,
-    async (error: AxiosError<{ detail?: { error?: string }; error?: string; message?: string }>) => {
+    async (error: AxiosError<ErrorPayload>) => {
         const status = error.response?.status;
         const shouldRedirect = (error.config as RequestConfig | undefined)?.redirectOnUnauthorized !== false;
         if (status === 401 && shouldRedirect && typeof window !== "undefined") {
@@ -43,12 +76,7 @@ request.interceptors.response.use(
         }
 
         const payload = error.response?.data;
-        const message =
-            payload?.detail?.error ||
-            payload?.error ||
-            payload?.message ||
-            error.message ||
-            `请求失败 (${status || 500})`;
+        const message = extractErrorMessage(payload) || error.message || `请求失败 (${status || 500})`;
         return Promise.reject(new Error(message));
     },
 );

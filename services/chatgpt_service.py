@@ -12,6 +12,7 @@ from services.image_errors import (
     ImageGenerationError,
     ImageGenerationPendingError,
     ImageGenerationTimeoutError,
+    image_generation_error_payload,
     image_generation_status_code,
 )
 from services.image_service import edit_image_result, generate_image_result, is_token_invalid_error
@@ -246,7 +247,10 @@ class ChatGPTService:
             else:
                 image_result = self.generate_with_pool(prompt, model, n, response_format)
         except ImageGenerationError as exc:
-            raise HTTPException(status_code=image_generation_status_code(exc), detail={"error": str(exc)}) from exc
+            raise HTTPException(
+                status_code=image_generation_status_code(exc),
+                detail=image_generation_error_payload(exc),
+            ) from exc
 
         return build_chat_image_completion(model, prompt, image_result)
 
@@ -326,7 +330,10 @@ class ChatGPTService:
             else:
                 image_result = self.generate_with_pool(prompt, default_image_model, 1, response_format)
         except ImageGenerationError as exc:
-            raise HTTPException(status_code=image_generation_status_code(exc), detail={"error": str(exc)}) from exc
+            raise HTTPException(
+                status_code=image_generation_status_code(exc),
+                detail=image_generation_error_payload(exc),
+            ) from exc
 
         image_items = image_result.get("data") if isinstance(image_result.get("data"), list) else []
         output = []

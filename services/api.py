@@ -7,7 +7,7 @@ from threading import Event, Thread
 
 from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from services.account_service import account_service
@@ -115,6 +115,19 @@ def resolve_cors_allowed_origins() -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
+def _is_openai_error_payload(detail: object) -> bool:
+    if not isinstance(detail, dict):
+        return False
+    error = detail.get("error")
+    return isinstance(error, dict) and isinstance(error.get("message"), str)
+
+
+def _http_exception_content(detail: object) -> dict[str, object]:
+    if _is_openai_error_payload(detail):
+        return detail
+    return {"detail": detail}
+
+
 def create_app() -> FastAPI:
     chatgpt_service = ChatGPTService(account_service)
     billing_store = PublicBillingStore(config.public_billing_file)
@@ -161,6 +174,15 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.exception_handler(HTTPException)
+    async def handle_http_exception(_, exc: HTTPException):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=_http_exception_content(exc.detail),
+            headers=exc.headers,
+        )
+
     app.mount("/generated-images", StaticFiles(directory=config.generated_images_dir), name="generated-images")
     router = APIRouter()
     register_admin_routes(router, app_version=app_version, chatgpt_service=chatgpt_service, require_auth_key=require_auth_key)
