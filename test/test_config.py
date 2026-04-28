@@ -13,7 +13,14 @@ if "curl_cffi.requests" not in sys.modules:
     sys.modules["curl_cffi"] = curl_cffi_module
     sys.modules["curl_cffi.requests"] = requests_module
 
-from services.image_service import LONG_REQUEST_TIMEOUT_SECONDS
+from services.image_service import (
+    LONG_REQUEST_TIMEOUT_SECONDS,
+    MEDIUM_REQUEST_TIMEOUT_SECONDS,
+    SHORT_REQUEST_TIMEOUT_SECONDS,
+)
+from services.text_service import TEXT_REQUEST_TIMEOUT_SECONDS
+
+IMAGE_TIMEOUT_SECONDS = 300
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -90,7 +97,13 @@ class ConfigLoadingTests(unittest.TestCase):
                 self.assertEqual(settings.default_model, "gpt-image-2")
                 self.assertEqual(settings.max_count_per_request, 4)
                 self.assertEqual(settings.auto_retry_times, 1)
-                self.assertEqual(settings.request_timeout_seconds, LONG_REQUEST_TIMEOUT_SECONDS)
+                self.assertEqual(SHORT_REQUEST_TIMEOUT_SECONDS, IMAGE_TIMEOUT_SECONDS)
+                self.assertEqual(MEDIUM_REQUEST_TIMEOUT_SECONDS, IMAGE_TIMEOUT_SECONDS)
+                self.assertEqual(LONG_REQUEST_TIMEOUT_SECONDS, IMAGE_TIMEOUT_SECONDS)
+                self.assertEqual(TEXT_REQUEST_TIMEOUT_SECONDS, IMAGE_TIMEOUT_SECONDS)
+                self.assertEqual(module.IMAGE_REQUEST_TIMEOUT_SECONDS, IMAGE_TIMEOUT_SECONDS)
+                self.assertEqual(module.IMAGE_TIMEOUT_LIMIT, IMAGE_TIMEOUT_SECONDS)
+                self.assertEqual(settings.request_timeout_seconds, IMAGE_TIMEOUT_SECONDS)
 
                 updated = module.update_image_settings(
                     {

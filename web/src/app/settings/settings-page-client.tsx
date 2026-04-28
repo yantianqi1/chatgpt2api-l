@@ -57,7 +57,7 @@ const DEFAULT_IMAGE_SETTINGS_DRAFT: ImageRuntimeSettingsDraft = {
   defaultModel: "gpt-image-2",
   maxCountPerRequest: "4",
   autoRetryTimes: "1",
-  requestTimeoutSeconds: "90",
+  requestTimeoutSeconds: "300",
 };
 
 function normalizeFiles(items: CPARemoteFile[]) {

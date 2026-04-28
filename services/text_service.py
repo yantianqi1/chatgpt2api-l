@@ -18,6 +18,9 @@ if TYPE_CHECKING:
     from curl_cffi.requests import Session
 
 
+TEXT_REQUEST_TIMEOUT_SECONDS = 300
+
+
 class TextGenerationError(Exception):
     pass
 
@@ -97,7 +100,7 @@ def _send_text_conversation(
             },
         },
         stream=True,
-        timeout=180,
+        timeout=TEXT_REQUEST_TIMEOUT_SECONDS,
     )
     if not response.ok:
         raise TextGenerationError(response.text[:400] or f"conversation failed: {response.status_code}")
